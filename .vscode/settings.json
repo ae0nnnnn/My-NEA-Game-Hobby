@@ -1,4 +1,7 @@
 {
     "luau-lsp.plugin.enabled": true,
-    "stylua.targetReleaseVersion": "latest"
+    "stylua.targetReleaseVersion": "latest",
+    "search.exclude": {
+        "Vault/**": true
+    }
 }

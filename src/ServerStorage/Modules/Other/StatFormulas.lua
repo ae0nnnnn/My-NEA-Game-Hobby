@@ -55,7 +55,7 @@ local CONFIG = {
 	},
 
 	TRANSFORM = {
-		StatMult = 1.25,
+		StatMult = 2.5, -- 2.5x boost when using mode2
 	},
 }
 

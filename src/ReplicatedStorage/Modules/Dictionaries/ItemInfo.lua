@@ -52,7 +52,7 @@ local thing = {
 
 local ItemInfo = {}
 local info = {
-    ["Hat"] = { -- Debug accesoory and would be removed past alpha
+    ["Hat"] = {
         Type = "Accessory",
         EquipSlot = "Hat",
         StackType = "Non-Stackable",
@@ -76,7 +76,7 @@ local info = {
         }
     },
 
-    ["Halo"] = { -- Debug accesoory and would be removed past alpha
+    ["Halo"] = {
         Type = "Accessory",
         EquipSlot = "Hat",
         StackType = "Non-Stackable",

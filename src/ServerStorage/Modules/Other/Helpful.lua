@@ -34,6 +34,7 @@ local Reduction_Range = 2
 local K_Time =  15 -- "the half life constant"
 
 local FlowBonuses = {}
+local GlobalMultMods = {} -- [char] = { astral=1.25, swing=0.45, parry=0.4, block=... } multiplicative
 
 function module.DamageDealer(char :Model, damage)
 	local hum = char:FindFirstChildOfClass("Humanoid") ::Humanoid
@@ -62,7 +63,7 @@ function module.ChangeWeapon(plr, char, torso)
 	char:SetAttribute("Stunned", false)
 	char:SetAttribute("Swing", false)
 	char:SetAttribute("Attacking", false)
-	char:SetAttribute("iframes", false)
+	char:SetAttribute("Iframes", false)
 	char:SetAttribute("IsBlocking", false)
 	char:SetAttribute("HoldingBlock", false)
 	char:SetAttribute("Mode1", false)
@@ -145,9 +146,10 @@ function module.ResetMobility(char)
 	if not hum then return end
 
 	-- AGL + per-action speed multiplier + live flow bonus (client-synced for
-	-- players, read from the server Flow object for NPCs).
+	-- players, read from the server Flow object for NPCs) + GlobalSpeedMult for passives/NPC slow.
 	local SpeedMods = require(RS.Modules.Movement.Ultils.Speed)
 	local flowBonus = module.GetCharFlowBonus(char)
+	local globalMult = SpeedMods.GetGlobalSpeedMult(char)
 
 	-- IsLow+InCombat penalty is centralized in SpeedMods.GetIsLowFactor (x0.65 on
 	-- every speed getter), so ResetMobility applies no local penalty and no longer
@@ -156,8 +158,48 @@ function module.ResetMobility(char)
 	local sprintKey = sprinting and "SprintSpeed" or "WalkSpeed"
 	local sprintAction = sprinting and "Sprint" or "Walk"
 
-	hum.WalkSpeed = (SpeedMods.GetMovementSpeed(char, sprintKey, sprintAction) or hum.WalkSpeed) * flowBonus
-	hum.JumpHeight = (SpeedMods.GetJumpSpeed(char, "JumpHeight") or hum.JumpHeight) * flowBonus
+	hum.WalkSpeed = (SpeedMods.GetMovementSpeed(char, sprintKey, sprintAction) or hum.WalkSpeed) * flowBonus * globalMult
+	hum.JumpHeight = (SpeedMods.GetJumpSpeed(char, "JumpHeight") or hum.JumpHeight) * flowBonus * globalMult
+end
+
+function module.GetGlobalSpeedMult(char)
+	local SpeedMods = require(RS.Modules.Movement.Ultils.Speed)
+	return SpeedMods.GetGlobalSpeedMult(char)
+end
+
+function module.SetGlobalSpeedMult(char, mult)
+	char:SetAttribute("GlobalSpeedMult", mult)
+	-- Mirror to NPC Flow object server-side for immediate heartbeat lerp (attribute replicates async)
+	local ok, npcModule = pcall(function() return require(SSModules.Objects.npc) end)
+	if ok and npcModule then
+		local npcObj = npcModule.GetNpcFromCharacter(char)
+		if npcObj and npcObj.MovementObj and npcObj.MovementObj.Flow then
+			npcObj.MovementObj.Flow.GlobalSpeedMult = mult
+		end
+	end
+end
+
+function module.ApplyGlobalMult(char, key, mult)
+	GlobalMultMods[char] = GlobalMultMods[char] or {}
+	GlobalMultMods[char][key] = mult
+	local eff = 1
+	for _, v in pairs(GlobalMultMods[char]) do eff *= v end
+	module.SetGlobalSpeedMult(char, eff)
+end
+
+function module.RemoveGlobalMult(char, key)
+	local mods = GlobalMultMods[char]
+	if not mods then return end
+	mods[key] = nil
+	local eff = 1
+	for _, v in pairs(mods) do eff *= v end
+	module.SetGlobalSpeedMult(char, eff)
+	if next(mods) == nil then GlobalMultMods[char] = nil end
+end
+
+function module.ClearGlobalMults(char)
+	GlobalMultMods[char] = nil
+	module.SetGlobalSpeedMult(char, 1)
 end
 
 function module.CheckForStatus(
@@ -295,6 +337,8 @@ function module.ManageStamina(char, action, skillName)
     local Stamina = char:GetAttribute("Stamina")
     local Fail = false
     local plr = Players:GetPlayerFromCharacter(char)
+
+	if not plr then return false end  --> npcs dont need to pay stamina
 
     if action == "Dodge" then
         if Stamina >= 20 then
@@ -437,6 +481,12 @@ end
 
 Players.PlayerRemoving:Connect(function(player)
 	FlowBonuses[player] = nil
+	-- Clean any character-based GlobalMultMods for this player's characters
+	for char in pairs(GlobalMultMods) do
+		if Players:GetPlayerFromCharacter(char) == player then
+			GlobalMultMods[char] = nil
+		end
+	end
 end)
 
 return module
