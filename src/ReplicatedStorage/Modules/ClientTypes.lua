@@ -28,6 +28,8 @@ export type MovementObjData = {
 			Side: number, -- Side of the wall (1 is right, -1 is left)
 			Normal: Vector3, -- Normal of the wall
 			Stop: (reason: string) -> (),
+			_JumpConn: RBXScriptConnection?, -- Active walljump tail heartbeat (nil when idle)
+			_JumpLV: LinearVelocity?, -- Active walljump mover (nil when idle)
 		},
 
 		DoubleJump: {
@@ -41,6 +43,7 @@ export type MovementObjData = {
 			Type: string, -- Type of dodge (standard, airdash,)
 			Speed: number, -- How fast the dodge is going
 			Stop: () -> (),
+			_CurveConn: RBXScriptConnection?, -- Active dodge curve heartbeat (nil when idle)
 		},
 
 		Climb: {
@@ -110,10 +113,12 @@ export type MovementObjData = {
 		MaxMomentum: number,
 
 		FlowBonus: number,
+		GlobalSpeedMult:number,
 		ChainCount: number,
 		LastChainTime: number,
 
 		IsTransitioning: boolean,
+		WallRunElapsed: number,
 		LerpConnection: RBXScriptConnection?,
 	},
 }
@@ -126,6 +131,8 @@ export type MovementObjMethods = {
 	ClearWalkAnims: (self: MovementObj) -> (),
 	ServerRequest: (self: MovementObj, action: string, ...any) -> (),
 	StateChecker: (self: MovementObj, action: string, Ignore: boolean) -> boolean,
+	CancelConflictingActions: (self: MovementObj, requestedAction: string) -> (),
+	CleanupOrphanPhysics: (self: MovementObj) -> (),
 	Destroy: (self: MovementObj) -> (),
 	GetAttributeChangedSignal: (self: MovementObj, attributeName: string) -> (),
 }

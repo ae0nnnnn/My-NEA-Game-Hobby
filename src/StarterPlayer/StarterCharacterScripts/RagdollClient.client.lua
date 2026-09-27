@@ -34,6 +34,30 @@ char:GetAttributeChangedSignal("IsRagdoll"):Connect(function()
 		hum:ChangeState(Enum.HumanoidStateType.Ragdoll)
 		hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
 		torso:ApplyImpulse(torso.CFrame.LookVector * 75)
+		-- Ragdoll gate: force-cancel wallrun on client (instant, no server round-trip)
+		pcall(function()
+			local RS = game:GetService("ReplicatedStorage")
+			local Players = game:GetService("Players")
+			local Movement = require(RS.Modules.Movement.Objects.Movement)
+			local plr = Players.LocalPlayer
+			local mov = plr and Movement.GetMovementObj(plr) or nil
+			if mov then
+				mov:CancelConflictingActions("Ragdoll")
+				mov:CleanupOrphanPhysics()
+				-- Also stop UI bars
+				pcall(function() mov:BarTweenStop({ Action = "Wallrun" }) end)
+			else
+				-- Fallback: direct HRP sweep
+				local hrp = char:FindFirstChild("HumanoidRootPart")
+				if hrp then
+					for _, inst in ipairs(hrp:GetChildren()) do
+						if inst.Name == "WallRunAttachment" or inst:IsA("LinearVelocity") or inst:IsA("AlignOrientation") then
+							pcall(function() inst:Destroy() end)
+						end
+					end
+				end
+			end
+		end)
 	else
 		if capturedBehavior then
 			UIS.MouseBehavior = capturedBehavior

@@ -95,6 +95,14 @@ local function Bind(char)
 	Tracked[char] = record
 end
 
+function module.ResetPeak(char)
+	local record = Tracked[char]
+	if not record then return end
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+	record.peakY = hrp.Position.Y
+end
+
 function module.TrackCharacter(char)
 	if Tracked[char] then
 		return

@@ -37,6 +37,7 @@ local function StartResting(MovementObj:ClientTypes.MovementObj)
 end
 
 function RestingModule.Start(MovementObj:ClientTypes.MovementObj)
+    pcall(function() MovementObj:CancelConflictingActions("Resting") end)
     if Restcooldowns[MovementObj] and tick() - Restcooldowns[MovementObj] < 0.05 then return end  -- just a debounce not an actual cooldown
     if MovementObj.States.IsResting then return end 
     StartResting(MovementObj)

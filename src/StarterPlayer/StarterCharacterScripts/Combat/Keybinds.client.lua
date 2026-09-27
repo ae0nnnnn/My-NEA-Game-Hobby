@@ -26,7 +26,10 @@ local InventoryEvent = Events.InventoryEvent
 local plr = game:GetService("Players").LocalPlayer
 local char = plr.Character
 local moveentobj = nil
-
+plr.CharacterAdded:Connect(function(newChar)
+	char = newChar
+	moveentobj = nil
+end)
 
 local MOVE_KEYS = {
 	[Enum.KeyCode.W] = "W",
@@ -110,7 +113,7 @@ uis.InputBegan:Connect(function(input,isTyping)
 		print("YO, I want to drop a tool")
 		if Tool then 
 			print("Dropping Tool", Tool.Name)
-			InventoryEvent:FireServer("Drop",Tool,1, "HotBar")
+			InventoryEvent:FireServer("Drop", Tool.Name, 1)
 		end 
 		
 	end
@@ -202,15 +205,11 @@ end)
 uis.InputBegan:Connect(function(key, istyping)
 	if isActuallyTyping()  then  return end
 
-	print("Yo")
-
 	if char:GetAttribute("IsTransforming") then
-		print("Yop")
 		return
 	end
 	
 	if key.KeyCode == Enum.KeyCode.F then
-		print("Yop")
 		blockingEvent:FireServer("Parry")
 		startBlocking()
 	end
@@ -237,18 +236,14 @@ end)
 ---------------------------------------------------------------------------------------
 
 
-uis.InputEnded:Connect(function(input,isTyping)
-	if isTyping then return end 
+uis.InputBegan:Connect(function(input, gp)
+	if gp or isActuallyTyping() then return end 
 
-	if input.keyCode == Enum.KeyCode.G and not char:GetAttribute("Mode1") then
-		if char:GetAttribute("Mode1",true) or char:GetAttribute("Mode2",true)  then return end
+	if input.KeyCode == Enum.KeyCode.G and not char:GetAttribute("Mode1") then
+		if char:GetAttribute("Mode1") or char:GetAttribute("Mode2")  then return end
 		Transform:FireServer("Mode 1")
-
-
-	end
-	
-	if input.keyCode == Enum.KeyCode.G and char:GetAttribute("Mode1",true)  then
-		if char:GetAttribute("Mode2",true) then return end
+	elseif input.KeyCode == Enum.KeyCode.G and char:GetAttribute("Mode1")  then
+		if char:GetAttribute("Mode2") then return end
 		Transform:FireServer("Mode 2")
 	end
 	
@@ -370,7 +365,7 @@ RunService.RenderStepped:Connect(function()
 end)
 	
 
-uis.InputBegan:Connect(function(input, gameProcessed)
+uis.InputBegan:Connect(function(input)
 	if isActuallyTyping() then return end
 	if char:GetAttribute("IsTransforming") then return end
 
@@ -399,47 +394,47 @@ end)
 -- R Z X C V  Skills (Theese can be changed to any keys you want later on)
 ---Comments indicate which move each key corresponds to so I dont get confused when add key rebind options later on
 
-uis.InputEnded:Connect(function(input,isTyping)
-	if isTyping then return end 
+uis.InputBegan:Connect(function(input, gp)
+	if gp or isActuallyTyping() then return end 
 
-	if input.keyCode == Enum.KeyCode.R then
+	if input.KeyCode == Enum.KeyCode.R then
 		Moves_Event:FireServer("R Move") --- This is the moveset's Special Move
 	end
 
 end)
 
-uis.InputEnded:Connect(function(input,isTyping)
-	if isTyping then return end 
+uis.InputBegan:Connect(function(input, gp)
+	if gp or isActuallyTyping() then return end 
 
-	if input.keyCode == Enum.KeyCode.Z then
+	if input.KeyCode == Enum.KeyCode.Z then
 		Moves_Event:FireServer("Z Move") -- This is the moveset's First Move
 	end
 
 end)
 
 
-uis.InputEnded:Connect(function(input,isTyping)
-	if isTyping then return end 
+uis.InputBegan:Connect(function(input, gp)
+	if gp or isActuallyTyping() then return end 
 
-	if input.keyCode == Enum.KeyCode.X then
+	if input.KeyCode == Enum.KeyCode.X then
 		Moves_Event:FireServer("X Move") -- This is the moveset's Second Move
 	end
 
 end)
 
-uis.InputEnded:Connect(function(input,isTyping)
-	if isTyping then return end 
+uis.InputBegan:Connect(function(input, gp)
+	if gp or isActuallyTyping() then return end 
 
-	if input.keyCode == Enum.KeyCode.C then
+	if input.KeyCode == Enum.KeyCode.C then
 		Moves_Event:FireServer("C Move")-- This is the moveset's Third Move
 	end
 
 end)
 
-uis.InputEnded:Connect(function(input,isTyping)
-	if isTyping then return end 
+uis.InputBegan:Connect(function(input, gp)
+	if gp or isActuallyTyping() then return end 
 
-	if input.keyCode == Enum.KeyCode.V then
+	if input.KeyCode == Enum.KeyCode.V then
 		Moves_Event:FireServer("V Move") --This is the moveset's ultimate Move
 	end
 
@@ -450,12 +445,24 @@ end)
 -- Weapon Equip/Unequip and Revert Transformations
 ------------------------------------------------------------------------------------------
 
-uis.InputEnded:Connect(function(input,isTyping)
-	if isTyping then return end 
+uis.InputBegan:Connect(function(input, gp)
+	if gp or isActuallyTyping() then return end 
 	
-	if input.keyCode == Enum.KeyCode.E then
+	if input.KeyCode == Enum.KeyCode.E then
 		if char:GetAttribute("CanInteract") then
 			return  --- The interacion stuff is going to be handled by the prox script as the it has the parrams needed for the remote event
+		end
+
+		-- Dive wins mid-air: E + IsInAir dives, never equips/reverts.
+		-- Grounded E falls through to the equip logic 100% unchanged.
+		if not moveentobj then
+			moveentobj = Movement.GetMovementObj(plr)
+		end
+		if moveentobj and moveentobj.States.IsInAir then
+			if not moveentobj:StateChecker("Dive", false) then
+				Dodge.Dive(moveentobj)
+			end
+			return
 		end
 
 		if char:GetAttribute("Mode2") then return end

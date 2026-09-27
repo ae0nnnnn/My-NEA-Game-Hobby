@@ -15,6 +15,10 @@ local cam = game.Workspace.CurrentCamera
 
 local WeaponAnimationFolder = RS.Animations.Weapons
 
+local VFXFolder = workspace:WaitForChild("VFX")
+local NPCFolder = workspace:WaitForChild("NPC")
+local CharactersFolder = workspace:WaitForChild("Characters")
+
 local Config = {
 	Cooldown = MovementData.Data.CrouchCooldown,
 	DefaultFov = MovementData.Data.BaseFov,
@@ -27,8 +31,32 @@ local Config = {
 	DustEnabled = true,
 	DynamicDustColor = true,
 	DustSpawnRate = 0.15,
-	MaxFreefallTime = 0.35,
+	MaxFreefallTime = 0.35
 }
+
+local function SpawnDust(HRP: BasePart, hitInstance: BasePart?, name: string, emitCount: number)
+	local template = RS.Effects.Combat.Dust
+	if not template then
+		return
+	end
+
+	local dust = template:Clone()
+	dust.Position = HRP.Position + Vector3.new(0, -2.5, 0)
+	dust.Parent = workspace.VFX
+	dust.Name = name
+
+	if Config.DynamicDustColor and hitInstance and hitInstance:IsA("BasePart") then
+		dust.Attachment.Dust.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, hitInstance.Color),
+			ColorSequenceKeypoint.new(1, hitInstance.Color),
+		})
+	else
+		dust.Attachment.Dust.Color = ColorSequence.new(Color3.fromRGB(255, 225, 225))
+	end
+
+	dust.Attachment.Dust:Emit(emitCount)
+	Debris:AddItem(dust, 0.8)
+end
 
 local CrouchDebounce = {}
 local OrginalMaxCam = {}
@@ -80,13 +108,14 @@ local function HeadChecker(char)
 	local Result = Cast.Ray({
 		Origin = head.Position,
 		Direction = head.CFrame.UpVector * 1.5,
-		FilterList = { char },
+		FilterList = { char, VFXFolder, NPCFolder, CharactersFolder },
 	})
 
 	return Result ~= nil
 end
 
 function CrouchModule.StartCrouch(MovementObj: ClientTypes.MovementObj, momentumRetain: number?)
+	pcall(function() MovementObj:CancelConflictingActions("CrouchStart") end)
 	if StopChecker(MovementObj) then
 		return
 	end
@@ -202,35 +231,11 @@ function CrouchModule.StartCrouch(MovementObj: ClientTypes.MovementObj, momentum
 			local Result = Cast.Ray({
 				Origin = HRP.Position + Vector3.new(0, 1, 0),
 				Direction = Vector3.new(0, -4.5, 0),
-				FilterList = { char },
+				FilterList = { char, VFXFolder, NPCFolder, CharactersFolder },
 			})
 
-			local Dustemplate = RS.Effects.Combat.Dust
+			SpawnDust(HRP, Result and Result.Instance, "CrouchDust", 1)
 
-			if not Dustemplate then
-				return
-			end
-			local dust = Dustemplate:Clone()
-			dust.Position = HRP.Position + Vector3.new(0, -2.5, 0)
-			dust.Parent = workspace.VFX
-			dust.Name = "CrouchDust"
-
-			if Config.DynamicDustColor then
-				if Result then
-					local hitpart = Result.Instance
-					if hitpart and hitpart:IsA("BasePart") then
-						dust.Attachment.Dust.Color = ColorSequence.new({
-							ColorSequenceKeypoint.new(0, hitpart.Color),
-							ColorSequenceKeypoint.new(1, hitpart.Color),
-						})
-					end
-				end
-			else
-				dust.Attachment.Dust.Color = ColorSequence.new(Color3.fromRGB(255, 225, 225))
-			end
-
-			dust.Attachment.Dust:Emit(1)
-			Debris:AddItem(dust, 0.8)
 			task.wait(Config.DustSpawnRate)
 			Dustdebounce = true
 		end
@@ -249,6 +254,7 @@ end
 local SlideDebounce = {}
 
 function CrouchModule.StartSlide(MovementObj: ClientTypes.MovementObj)
+	pcall(function() MovementObj:CancelConflictingActions("SlideStart") end)
 	if MovementObj.States.ISSliding then
 		MovementObj.InfoTable.Slide.Stop()
 		return
@@ -292,6 +298,7 @@ function CrouchModule.StartSlide(MovementObj: ClientTypes.MovementObj)
 	end
 
 	local conn = nil
+	local dustTimer = 0
 	MovementObj.InfoTable.Slide.Stop = function()
 		if not MovementObj.States.ISSliding then
 			return
@@ -326,9 +333,25 @@ function CrouchModule.StartSlide(MovementObj: ClientTypes.MovementObj)
 			slideDir = Vector3.new(HRP.CFrame.LookVector.X, 0, HRP.CFrame.LookVector.Z).Unit
 		end
 
-		local hit = workspace:Raycast(HRP.Position + Vector3.new(0, 1, 0), Vector3.new(0, -3.5, 0), { char })
+		local hit = Cast.Ray({
+			Origin = HRP.Position + Vector3.new(0, 1, 0),
+			Direction = Vector3.new(0, -1, 0),
+			Range = 3.5,
+			FilterList = { char, VFXFolder, NPCFolder, CharactersFolder },
+		})
 		local groundNormal = hit and hit.Normal or Vector3.new(0, 1, 0)
 		local slope = groundNormal:Dot(slideDir)
+
+		if Config.DustEnabled and hit then
+			dustTimer += dt
+			if dustTimer >= Config.DustSpawnRate then
+				dustTimer = 0
+				local puffs = math.clamp(math.floor(bv.Velocity.Magnitude / 20), 1, 3)
+				SpawnDust(HRP, hit.Instance, "SlideDust", puffs)
+			end
+		else
+			dustTimer = Config.DustSpawnRate
+		end
 
 		local speed = bv.Velocity.Magnitude
 		if slope <= 0 then
@@ -350,6 +373,7 @@ function CrouchModule.StartSlide(MovementObj: ClientTypes.MovementObj)
 end
 
 function CrouchModule.Start(MovementObj: ClientTypes.MovementObj)
+	pcall(function() MovementObj:CancelConflictingActions("CrouchStart") end)
 	if MovementObj.IsActing.IsSprinting or MovementObj.IsActing.IsEXSprinting then
 		CrouchModule.StartSlide(MovementObj)
 		return

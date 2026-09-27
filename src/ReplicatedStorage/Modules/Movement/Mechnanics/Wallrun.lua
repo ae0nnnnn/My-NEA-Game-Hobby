@@ -12,6 +12,25 @@ local SpeedMods = require(RSModules.Movement.Ultils.Speed)
 
 local WeaponAnimations = RS.Animations.Weapons
 
+local function easeOutCubic(t: number): number
+	local omt = 1 - t
+	return 1 - omt * omt * omt
+end
+
+local function wjLerp(a: number, b: number, t: number): number
+	return a + (b - a) * t
+end
+
+-- Anti-fling (mirrors Dodge HitWallHeadOn): head-on wall contact bonk-stops
+-- the jump mover; the Wallhop anim has no stop handle and finishes naturally.
+-- Grazes/parallels pass so a side approach can still start a wallrun.
+local JUMP_WALL_STOP_DOT = -0.3
+local JUMP_WALL_PROBE_MARGIN = 2.5
+
+local VFXFolder = workspace:WaitForChild("VFX")
+local NPCFolder = workspace:WaitForChild("NPC")
+local CharactersFolder = workspace:WaitForChild("Characters")
+
 local WallrunCooldowns = {}
 
 local AnimationCache = setmetatable({}, { __mode = "k" })
@@ -39,26 +58,23 @@ local function WallChecker(char)
 
 	local range = MovementData.Data.WallRunCheckRange
 	local leniency = MovementData.Data.WallRunFacingLeniency
-	local filter = { char, workspace.VFX }
+	local filter = { char, VFXFolder, NPCFolder, CharactersFolder }
 
-	local lookVector  = HRP.CFrame.LookVector
+	local lookVector = HRP.CFrame.LookVector
 	local rightVector = HRP.CFrame.RightVector
 
-	local function CastDir(origin,direction)
+	local function CastDir(origin, direction)
 		return Cast.Ray({
 			Origin = origin,
 			Direction = direction,
 			Range = range,
-			FilterList = filter
+			FilterList = filter,
 		})
 	end
 
 	local forwardClearance = CastDir(HRP.Position, lookVector)
 	local forwardPush = forwardClearance and math.min(range * 0.5, forwardClearance.Distance * 0.5) or range * 0.5
 	local forwardOrigin = HRP.Position + lookVector * forwardPush
-
-
-	
 
 	-- Perpendicular side rays: exact facing, highest priority.
 	local LeftResult = CastDir(HRP.Position, -rightVector)
@@ -79,7 +95,11 @@ local function WallChecker(char)
 
 	if LeftLean and math.abs(LeftLean.Normal.Y) < 0.2 and math.abs(lookVector:Dot(LeftLean.Normal)) < facingMax then
 		return LeftLean, -1
-	elseif RightLean and math.abs(RightLean.Normal.Y) < 0.2 and math.abs(lookVector:Dot(RightLean.Normal)) < facingMax then
+	elseif
+		RightLean
+		and math.abs(RightLean.Normal.Y) < 0.2
+		and math.abs(lookVector:Dot(RightLean.Normal)) < facingMax
+	then
 		return RightLean, 1
 	end
 
@@ -90,6 +110,31 @@ local function StartWallRun(MovementObj: ClientTypes.MovementObj, hit: RaycastRe
 	if not MovementObj or not MovementObj.char or not MovementObj.identifer then
 		return
 	end
+	-- Opt A: ignore re-trigger while already wallrunning — don't nuke the active movers
+	if MovementObj.IsActing.WallRunning then
+		return
+	end
+	-- Kill any lingering jump-tail mover so wallrun never stacks on it
+	do
+		local prevConn = MovementObj.InfoTable.Wallrun._JumpConn :: RBXScriptConnection?
+		if prevConn then
+			pcall(function()
+				prevConn:Disconnect()
+			end)
+			MovementObj.InfoTable.Wallrun._JumpConn = nil
+		end
+		local prevLV = MovementObj.InfoTable.Wallrun._JumpLV :: LinearVelocity?
+		if prevLV and prevLV.Parent then
+			pcall(function()
+				prevLV:Destroy()
+			end)
+		end
+		MovementObj.InfoTable.Wallrun._JumpLV = nil
+	end
+	pcall(function()
+		MovementObj:CancelConflictingActions("WallRunStart")
+	end)
+
 	local char = MovementObj.char
 	local CurrentWeapon = char:GetAttribute("CurrentWeapon")
 	local Hum = char.Humanoid
@@ -97,10 +142,6 @@ local function StartWallRun(MovementObj: ClientTypes.MovementObj, hit: RaycastRe
 	local WallrunSpeed = SpeedMods.GetMovementSpeed(char, "WallRunSpeed", "WallRun")
 
 	if not Hum or not HRP then
-		return
-	end
-
-	if MovementObj.IsActing.WallRunning then
 		return
 	end
 
@@ -255,6 +296,12 @@ local function StartWallRun(MovementObj: ClientTypes.MovementObj, hit: RaycastRe
 	conn = RunService.Heartbeat:Connect(function(dt)
 		elapsed += dt
 
+		-- Ragdoll gate: eject mid-run if ragdolled/stunned (covers both entry + active)
+		if char:GetAttribute("IsRagdoll") or char:GetAttribute("Stunned") then
+			StopWallRun("Ragdoll")
+			return
+		end
+
 		if elapsed >= duration then
 			StopWallRun()
 			return
@@ -269,7 +316,7 @@ local function StartWallRun(MovementObj: ClientTypes.MovementObj, hit: RaycastRe
 			Origin = HRP.Position,
 			Direction = -Normal,
 			Range = MovementData.Data.WallRunContactRange,
-			FilterList = { char, workspace.VFX },
+			FilterList = { char, VFXFolder, NPCFolder, CharactersFolder },
 		})
 
 		if not check then
@@ -286,7 +333,7 @@ local function StartWallRun(MovementObj: ClientTypes.MovementObj, hit: RaycastRe
 					Origin = HRP.Position,
 					Direction = -frozenNormal,
 					Range = MovementData.Data.WallRunContactRange,
-					FilterList = { char },
+					FilterList = { char, VFXFolder, NPCFolder, CharactersFolder },
 				})
 
 				if not checkv2 then
@@ -339,6 +386,11 @@ function Wallrun.Start(MovementObj: ClientTypes.MovementObj)
 		return
 	end
 
+	-- Ragdoll gate: never start wallrun while ragdolled/stunned
+	if char:GetAttribute("IsRagdoll") or char:GetAttribute("Stunned") then
+		return
+	end
+
 	if hum.FloorMaterial ~= Enum.Material.Air then
 		return
 	end
@@ -346,11 +398,17 @@ function Wallrun.Start(MovementObj: ClientTypes.MovementObj)
 	if
 		MovementObj.IsActing.WallRunning
 		or MovementObj.IsActing.Climbing
+		or MovementObj.IsActing.Dodging
 		or MovementObj.States.IsOnWall
 		or MovementObj.States.IsCrouching
 	then
 		return
 	end
+
+	-- Opt A: only sweep after confirming we're not already wallrunning
+	pcall(function()
+		MovementObj:CancelConflictingActions("WallRunStart")
+	end)
 
 	if WallrunCooldowns[MovementObj] and tick() - WallrunCooldowns[MovementObj] < MovementData.Data.WallRunCooldown then
 		return
@@ -372,6 +430,9 @@ function Wallrun.Jump(MovementObj: ClientTypes.MovementObj)
 	end
 
 	local char = MovementObj.char
+	if char and (char:GetAttribute("IsRagdoll") or char:GetAttribute("Stunned")) then
+		return
+	end
 	local Hum = char.Humanoid
 	local HRP = char.HumanoidRootPart
 	local CurrentWeapon = char:GetAttribute("CurrentWeapon")
@@ -380,7 +441,13 @@ function Wallrun.Jump(MovementObj: ClientTypes.MovementObj)
 	end
 
 	MovementObj:ServerRequest("WallRunJump")
-	MovementObj.InfoTable.Wallrun.Stop("Jump")
+	if type(MovementObj.InfoTable.Wallrun.Stop) == "function" then
+		pcall(function()
+			MovementObj.InfoTable.Wallrun.Stop("Jump")
+		end)
+	else
+		MovementObj.InfoTable.Wallrun.Stop("Jump")
+	end
 
 	FlowManager.OnMechanicJump(MovementObj, "WallRunJump")
 
@@ -441,20 +508,113 @@ function Wallrun.Jump(MovementObj: ClientTypes.MovementObj)
 
 	local attachment = HRP:FindFirstChild("RootAttachment") or Instance.new("Attachment", HRP)
 
+	-- Kill any previous jump tail before launching (spam-safe)
+	do
+		local prevConn = MovementObj.InfoTable.Wallrun._JumpConn :: RBXScriptConnection?
+		if prevConn then
+			pcall(function()
+				prevConn:Disconnect()
+			end)
+			MovementObj.InfoTable.Wallrun._JumpConn = nil
+		end
+		local prevLV = MovementObj.InfoTable.Wallrun._JumpLV :: LinearVelocity?
+		if prevLV and prevLV.Parent then
+			pcall(function()
+				prevLV:Destroy()
+			end)
+		end
+		MovementObj.InfoTable.Wallrun._JumpLV = nil
+	end
+
 	local lv = Instance.new("LinearVelocity")
 	lv.Attachment0 = attachment
 	lv.MaxForce = math.huge
 	lv.VectorVelocity = launchVect
 	lv.RelativeTo = Enum.ActuatorRelativeTo.World
 	lv.Parent = HRP
+	MovementObj.InfoTable.Wallrun._JumpLV = lv
 
 	local boostDuration = D.WallJumpBoostDuration
+	local decayTime = D.WallJumpDecayTime
+	local totalDur = boostDuration + decayTime
 
-	task.delay(boostDuration, function()
-		if lv and lv.Parent then
-			lv:Destroy()
+	-- Decay end-point: lose 40% of launch velocity over decay, Y is cut (gravity wins)
+	local walkSpeed = SpeedMods.GetMovementSpeed(char, "WalkSpeed", "Walk") or 16
+	local launchFlat = Vector3.new(launchDir.X, 0, launchDir.Z)
+	local startFlat = Vector3.new(boostFlat.X, 0, boostFlat.Z)
+	local retainFactor = D.WallJumpRetainFactor or 0.6
+	local endFlat: Vector3
+	if startFlat.Magnitude > 0.1 then
+		local retained = startFlat * retainFactor
+		if retained.Magnitude >= walkSpeed then
+			endFlat = retained
+		elseif launchFlat.Magnitude > 0.1 then
+			endFlat = launchFlat.Unit * walkSpeed
+		else
+			endFlat = startFlat.Unit * walkSpeed
 		end
+	elseif launchFlat.Magnitude > 0.1 then
+		endFlat = launchFlat.Unit * walkSpeed
+	else
+		endFlat = Vector3.zero
+	end
+
+	local startT = os.clock()
+	local jumpConn: RBXScriptConnection? = nil
+	jumpConn = RunService.Heartbeat:Connect(function(dt)
+		if not lv or not lv.Parent then
+			if jumpConn then
+				jumpConn:Disconnect()
+			end
+			MovementObj.InfoTable.Wallrun._JumpConn = nil
+			return
+		end
+		-- Anti-fling: head-on contact kills the mover, anim finishes solo.
+		do
+			local curVel = lv.VectorVelocity
+			if curVel.Magnitude > 1 then
+				local d = curVel.Unit
+				local params = RaycastParams.new()
+				params.FilterType = Enum.RaycastFilterType.Exclude
+				params.FilterDescendantsInstances = { char, VFXFolder, NPCFolder, CharactersFolder }
+				local range = curVel.Magnitude * math.max(dt or 0.016, 0.001) * 2 + JUMP_WALL_PROBE_MARGIN
+				local hit = workspace:Raycast(HRP.Position, d * range, params)
+				if hit and d:Dot(hit.Normal) < JUMP_WALL_STOP_DOT then
+					if jumpConn then
+						jumpConn:Disconnect()
+					end
+					MovementObj.InfoTable.Wallrun._JumpConn = nil
+					MovementObj.InfoTable.Wallrun._JumpLV = nil
+					lv:Destroy()
+					return
+				end
+			end
+		end
+		local t = os.clock() - startT
+		if t < boostDuration then
+			lv.VectorVelocity = launchVect
+			return
+		end
+		if t >= totalDur then
+			if jumpConn then
+				jumpConn:Disconnect()
+			end
+			MovementObj.InfoTable.Wallrun._JumpConn = nil
+			MovementObj.InfoTable.Wallrun._JumpLV = nil
+			if lv and lv.Parent then
+				lv:Destroy()
+			end
+			return
+		end
+		local u = math.clamp((t - boostDuration) / math.max(0.001, decayTime), 0, 1)
+		local e = easeOutCubic(u)
+		local curFlat = Vector3.new(wjLerp(startFlat.X, endFlat.X, e), 0, wjLerp(startFlat.Z, endFlat.Z, e))
+		-- Y cut: fade fast in first ~40% of decay, then 0 so gravity takes over
+		local yFade = 1 - easeOutCubic(math.clamp(u * 2.5, 0, 1))
+		local curY = uppower * yFade
+		lv.VectorVelocity = curFlat + Vector3.new(0, curY, 0)
 	end)
+	MovementObj.InfoTable.Wallrun._JumpConn = jumpConn
 end
 
 return Wallrun

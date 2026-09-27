@@ -66,6 +66,13 @@ function SpeedModule.GetSpeedMult(char, action)
 	return char:GetAttribute(attr) or char:GetAttribute("SpeedMultiplier") or 1
 end
 
+--- Global speed multiplier (for passives / NPC parry-block slow). Single source
+--- is char:GetAttribute("GlobalSpeedMult"), mirrored to Flow.GlobalSpeedMult on client.
+function SpeedModule.GetGlobalSpeedMult(char)
+	if not char then return 1 end
+	return char:GetAttribute("GlobalSpeedMult") or 1
+end
+
 --- IsLow + InCombat penalty: 65% of normal speed while both low health and in
 --- combat (same gate the old ResetMobility low-penalty used, now centralized so
 --- EVERY speed source honors it). Returns 1 otherwise.
@@ -74,7 +81,7 @@ function SpeedModule.GetIsLowFactor(char)
 		return 1
 	end
 	if char:GetAttribute("IsLow") and char:GetAttribute("InCombat") then
-		return 0.65
+		return 0.5
 	end
 	return 1
 end
@@ -123,6 +130,18 @@ function SpeedModule.GetMaxDodgeSpeed(char)
 	local AGL = char and char:GetAttribute("AGL") or BASE_AGL
 	local dodgeMult = 1 + CONFIG.DodgeAGLStrength * (SpeedModule.AGLMult(AGL) - 1)
 	return MovementData.Data.MaxDodgeSpeed * dodgeMult * SpeedModule.GetSpeedMult(char, "Dodge") * SpeedModule.GetIsLowFactor(char)
+end
+
+--- Attack animation speed, softly scaled by AGL so high AGL feels faster but never runaway.
+--- Uses 25% of the AGL curve bonus, capped at 1.2. Respects AttackSpeedMultiplier attribute and IsLow.
+--- Nerf lever: reduce 0.25 to 0.15 or lower cap if too strong.
+function SpeedModule.GetAttackSpeed(char)
+	local AGL = char and char:GetAttribute("AGL") or BASE_AGL
+	local aglMult = SpeedModule.AGLMult(AGL)
+	local attackMult = 1 + 0.20 * (aglMult - 1)
+	if attackMult > 1.2 then attackMult = 1.2 end
+	if attackMult < 1 then attackMult = 1 end
+	return attackMult * SpeedModule.GetSpeedMult(char, "Attack") * SpeedModule.GetIsLowFactor(char)
 end
 
 SpeedModule.CONFIG = CONFIG

@@ -32,6 +32,7 @@ local RATES = {
 	DoubleJump = 0.05,
 	Climb = 0.3,
 	Dodge = MovementData.Data.DodgeCooldown,
+	Dive = MovementData.Data.DiveCooldown,
 	DodgeCancel = MovementData.Data.DodgeCancelCooldown,
 	CrouchStart = 0.1,
 	CrouchEnd = 0.1,
@@ -130,6 +131,11 @@ local function CheckAction(state, char, MovementObj:ClientTypes.MovementObj, act
 		end
 	elseif action == "Dodge" then
 		if acting.Dodging then return false, "spoof" end
+	elseif action == "Dive" then
+		-- Dive is a stance, not a burst: entry-gated on air + not already
+		-- diving. Air mismatch is a state race -> blocked, never kick.
+		if acting.Dodging then return false, "blocked" end
+		if not WasRecentlyAirborne(state, char) then return false, "blocked" end
 	elseif action == "DodgeCancel" then
 		if not acting.Dodging and not char:GetAttribute("Dodging") then return false, "blocked" end
 	elseif action == "CrouchStart" then

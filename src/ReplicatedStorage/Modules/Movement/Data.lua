@@ -25,8 +25,23 @@ export type DataSet = {
 	AirDodgeMultiplier: number,
 	AirDodgeBonusMultiplier: number,
 	AirDodgeBonusWindow: number,
-	AirDodgeCamUpAngle: number,
-	DodgeMomentumRetention:number,
+	AirDodgeCamPitchAngle: number,
+	DodgeMomentumRetention: number,
+	DodgeAccelTime: number,
+	DodgeDecayTime: number,
+	DodgePeakScale: number,
+	DodgeMinCarry: number,
+
+	--// Dive (E + IsInAir stance: accelerating forward-then-down arc,
+	--// no time limit, killed by Landed / DoubleJump only)
+	DiveSpeedBoost: number,
+	DiveCooldown: number,
+	DiveAccel: number,
+	DiveMaxSpeed: number,
+	DiveArcTime: number,
+	DiveEntryBias: number,
+	DiveEndBias: number,
+	DivePosePitch: number,
 
 	--// Double Jump
 	DoubleJumpPower: number,
@@ -82,7 +97,9 @@ export type DataSet = {
 	WallJumpUp: number,
 	WallJumpHop: number,
 	WallJumpBoostDuration: number,
+	WallJumpDecayTime: number,
 	WallJumpWallDirBlend: number,
+	WallJumpRetainFactor: number,
 
 	--// Wall Run Curvature
 	WallRunCurveSteerRate: number,
@@ -117,11 +134,28 @@ local DataTable: DataSet = {
 	DodgeDuration = 0.25,
 	DodgeCooldown = 0.55,
 	DodgeCancelCooldown = 0.5,
-	AirDodgeMultiplier = 0.9,
+	AirDodgeMultiplier = 1.08,
 	AirDodgeBonusMultiplier = 1.5,
 	AirDodgeBonusWindow = 1.0,
-	AirDodgeCamUpAngle = 45,
+	AirDodgeCamPitchAngle = 90,
 	DodgeMomentumRetention = 0.5,
+	DodgeAccelTime = 0.04,
+	DodgeDecayTime = 0.29,
+	DodgePeakScale = 1.18,
+	DodgeMinCarry = 0.32,
+
+	--// Dive
+	DiveSpeedBoost = 1.12,
+	DiveCooldown = 0.55,
+	DiveAccel = 140,
+	DiveMaxSpeed = 180,
+	DiveArcTime = 0.40,
+	DiveEntryBias = 0.15,
+	DiveEndBias = 0.85,
+	-- Extra local-X pitch on the dive align: the dive pose is authored
+	-- face-up (+90 deg about X off the root), so the root pitches -90 to put
+	-- the body headfirst along the fall line. Tune if the pose changes.
+	DivePosePitch = -90,
 
 	--// Double Jump
 	DoubleJumpPower = 50,
@@ -179,7 +213,9 @@ local DataTable: DataSet = {
 	WallJumpUp = 82.5,
 	WallJumpHop = 75,
 	WallJumpBoostDuration = 0.15,
+	WallJumpDecayTime = 0.15,
 	WallJumpWallDirBlend = 0.25,
+	WallJumpRetainFactor = 0.6,
 
 	--// Wall Run Curvature
 	WallRunCurveSteerRate = 18,
@@ -187,7 +223,7 @@ local DataTable: DataSet = {
 
 	--// Fall
 	SafeFallDistance = 35,
-	FallDamagePerStud = 5,
+	FallDamagePerStud = 3,
 	FallReductionEndMax = 0.5,
 	FallReductionCap = 1.0,
 	FallEndStatMax = 99,

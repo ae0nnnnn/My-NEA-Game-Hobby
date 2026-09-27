@@ -85,7 +85,9 @@ function Sprinting.ForceStopAllSprinting(MovementObj: ClientTypes.MovementObj)
 	TS:Create(cam, TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { FieldOfView = MovementData.Data.BaseFov }):Play()
 
 	if MovementObj.InfoTable.Sprint.SprintAnim then
-		MovementObj.InfoTable.Sprint.SprintAnim:Stop(0.2)
+		MovementObj.InfoTable.Sprint.SprintAnim:Stop(0.1)
+		MovementObj.InfoTable.Sprint.SprintAnim:Destroy()
+		MovementObj.InfoTable.Sprint.SprintAnim = nil
 	end
 
 	if SprintConns[MovementObj] then
@@ -112,6 +114,7 @@ function Sprinting.NormalToggle(MovementObj: ClientTypes.MovementObj)
 		task.wait(0.1)
 		Debounce[MovementObj] = false
 	else
+		pcall(function() MovementObj:CancelConflictingActions("SprintStart") end)
 		if not Sprinting.CanSprint(MovementObj) then
 			Debounce[MovementObj] = false
 			return
@@ -221,6 +224,7 @@ function Sprinting.ExToggle(MovementObj: ClientTypes.MovementObj)
 		EX_Debounce[MovementObj] = false
 	else
 		-- IF NOT EX SPRINTING: Upgrade to ExSprint tier
+		pcall(function() MovementObj:CancelConflictingActions("ExSprintStart") end)
 		if not MovementObj.IsActing.IsSprinting or not Sprinting.CanSprint(MovementObj) then
 			EX_Debounce[MovementObj] = false
 			return

@@ -80,14 +80,29 @@ local function StartFlow(MovementObj)
 		Momentum = 0,
 		MaxMomentum = SpeedMods.GetMaxMomentum(MovementObj.char),
 		FlowBonus = 1.0,
+		GlobalSpeedMult = MovementObj.char and MovementObj.char:GetAttribute("GlobalSpeedMult") or 1,
 		ChainCount = 0,
 		LastChainTime = 0,
 		IsTransitioning = false,
+		WallRunElapsed = 0,
 		LerpConnection = nil,
 	}
 
 	MovementObj.Flow = proxy.WrapTable(MovementObj, rawFlow, "Flow")
 	FlowManager.StartSpeedLerp(MovementObj)
+
+	-- Keep Flow.GlobalSpeedMult in sync with the char attribute (server-authoritative for passives).
+	if MovementObj.char then
+		local char = MovementObj.char
+		pcall(function()
+			char:GetAttributeChangedSignal("GlobalSpeedMult"):Connect(function()
+				local v = char:GetAttribute("GlobalSpeedMult") or 1
+				if MovementObj.Flow then
+					MovementObj.Flow.GlobalSpeedMult = v
+				end
+			end)
+		end)
+	end
 end
 
 --[Module Functions]--
@@ -126,6 +141,8 @@ function Movement.new(identifer): Type.MovementObj
 					Side = 0,
 					Normal = Vector3.new(0, 0, 0),
 					Stop = "",
+					_JumpConn = nil,
+					_JumpLV = nil,
 				},
 
 				DoubleJump = {
@@ -141,6 +158,7 @@ function Movement.new(identifer): Type.MovementObj
 					Type = "",
 					Speed = 0,
 					Stop = function() end,
+					_CurveConn = nil,
 				},
 
 				Climb = {
@@ -414,6 +432,9 @@ function Movement:ServerRequest(action,...)
 	if action == "Dodge" then
 		MovementEvent:FireServer(action,...)
 	end
+	if action == "Dive" then
+		MovementEvent:FireServer(action,...)
+	end
 	if action == "DodgeCancel" then
 		MovementEvent:FireServer(action)
 	end
@@ -441,7 +462,7 @@ function Movement:ServerRequest(action,...)
 	end
 end
 
-function Movement:StateChecker(self: Type.MovementObj, action: string, Ignore: boolean): boolean
+function Movement:StateChecker (action: string, Ignore: boolean): boolean
 	if not action then
 		warn("[" .. script.Name .. "] - You forgot to add the action for a StateChecker")
 		return true
@@ -460,6 +481,22 @@ function Movement:StateChecker(self: Type.MovementObj, action: string, Ignore: b
 		if not Ignore and self.IsActing.Dodging then
 			return true
 		end
+	elseif action == "Dive" then
+		if self.IsActing.Climbing then
+			return true
+		end
+		if self.IsActing.WallRunning then
+			return true
+		end
+		if self.States.IsResting then
+			return true
+		end
+		if not self.States.IsInAir then
+			return true
+		end
+		if not Ignore and self.IsActing.Dodging then
+			return true
+		end
 	elseif action == "SprintStart" or action == "ExSprintStart" then
 		if self.IsActing.Climbing then
 			return true
@@ -471,6 +508,13 @@ function Movement:StateChecker(self: Type.MovementObj, action: string, Ignore: b
 			return true
 		end
 	elseif action == "WallRunStart" then
+		-- Ragdoll gate: match server MovementValidator and Wallrun.Start
+		if self.char and (self.char:GetAttribute("IsRagdoll") or self.char:GetAttribute("Stunned")) then
+			return true
+		end
+		if self.IsActing.Dodging then
+			return true
+		end
 		if self.IsActing.WallRunning then
 			return true
 		end
@@ -487,6 +531,9 @@ function Movement:StateChecker(self: Type.MovementObj, action: string, Ignore: b
 			return true
 		end
 	elseif action == "WallRunJump" then
+		if self.char and (self.char:GetAttribute("IsRagdoll") or self.char:GetAttribute("Stunned")) then
+			return true
+		end
 		if not self.IsActing.WallRunning then
 			return true
 		end
@@ -527,6 +574,125 @@ function Movement:StateChecker(self: Type.MovementObj, action: string, Ignore: b
 	end
 
 	return false
+end
+
+-- Sweep any orphaned physics movers left on HRP when a transition was raced.
+-- This is the failsafe; callers should first try the typed Stop() closures.
+function Movement:CleanupOrphanPhysics()
+	local char = self.char
+	if not char then return end
+	local HRP = char:FindFirstChild("HumanoidRootPart")
+	if not HRP then return end
+	-- Named orphans
+	for _, name in ipairs({ "DodgeAtt", "DashForce", "DashRotation", "WallRunAttachment", "RootAttachment" }) do
+		local obj = HRP:FindFirstChild(name)
+		if obj then
+			-- RootAttachment is also used by DoubleJump/WallJump but those are short-lived (0.2s).
+			-- Only nuke it if it hosts a lingering mover.
+			if name == "RootAttachment" then
+				local hasMover = false
+				for _, child in ipairs(HRP:GetChildren()) do
+					if child:IsA("LinearVelocity") and child.Attachment0 == obj then hasMover = true end
+				end
+				if not hasMover then continue end
+			end
+			pcall(function() obj:Destroy() end)
+		end
+	end
+	for _, inst in ipairs(HRP:GetChildren()) do
+		if inst:IsA("LinearVelocity") or inst:IsA("BodyVelocity") or inst:IsA("VectorForce") or inst:IsA("AlignOrientation") then
+			-- Movement movers all use huge forces; the sweep is scoped to HRP only so it's safe.
+			pcall(function() inst:Destroy() end)
+		end
+	end
+	-- Climb BodyVelocity (Animate.client.lua) also lives on HRP — caught above.
+	-- Reset anchoring/rotation locks that a raced LedgeHold/Climb could leave.
+	if HRP.Anchored and not self.States.IsOnWall then
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health > 0 then
+			pcall(function() HRP.Anchored = false end)
+			if hum then pcall(function() hum.AutoRotate = true end) end
+		end
+	end
+end
+
+-- Cancel whatever is currently acting before starting `requestedAction`.
+-- Unlike StateChecker (which blocks), this *tears down* the previous mover so the
+-- new one never stacks. Safe to call even if nothing is active.
+function Movement:CancelConflictingActions(requestedAction: string)
+	-- Typed Stop() closures first (they clear flags, animations, connections)
+	local didCancel = false
+	local function tryStop(key: string)
+		local entry = self.InfoTable[key]
+		if entry and type(entry.Stop) == "function" then
+			-- Avoid pcalling an already-nuked no-op
+			local ok = pcall(entry.Stop)
+			if ok then didCancel = true end
+			-- Reset to no-op so double-cancel is harmless
+			if entry.Stop ~= nil then
+				pcall(function() entry.Stop = function() end end)
+			end
+		end
+	end
+
+	-- Flag-driven map — covers every action that creates a mover
+	if self.IsActing.Dodging and requestedAction ~= "DodgeCancel" then
+		tryStop("Dodge")
+		self.IsActing.Dodging = false
+	end
+	if self.IsActing.WallRunning and requestedAction ~= "WallRunStart" and requestedAction ~= "WallRunJump" then
+		-- Wallrun Stop takes an optional reason; default nil is a normal stop
+		tryStop("Wallrun")
+		self.IsActing.WallRunning = false
+	end
+	if self.IsActing.Climbing and requestedAction ~= "Climb" then
+		tryStop("Climb")
+		self.IsActing.Climbing = false
+	end
+	if self.States.ISSliding then
+		tryStop("Slide")
+		self.States.ISSliding = false
+	end
+	if self.States.IsCrouching and requestedAction ~= "CrouchStart" and requestedAction ~= "CrouchEnd" then
+		-- Crouch Stop checks HeadChecker internally — force regardless via orphan sweep if needed
+		tryStop("Crouch")
+		-- State flag is cleared inside the Stop closure; ensure fallback
+		self.States.IsCrouching = false
+	end
+	if self.States.IsResting then
+		tryStop("Resting")
+		self.States.IsResting = false
+	end
+	if self.States.IsOnWall and (requestedAction == "Dodge" or requestedAction == "DoubleJump" or requestedAction == "Climb") then
+		-- LedgeHold leaves HRP.Anchored — release it
+		self.States.IsOnWall = false
+		if self.char then
+			local HRP = self.char:FindFirstChild("HumanoidRootPart")
+			local hum = self.char:FindFirstChildOfClass("Humanoid")
+			if HRP then pcall(function() HRP.Anchored = false end) end
+			if hum then pcall(function() hum.AutoRotate = true end) end
+		end
+	end
+
+	if didCancel then
+		self:CleanupOrphanPhysics()
+	else
+		-- Opt A: WallRun re-triggers while already wallrunning should be ignored, not swept
+		if requestedAction == "WallRunStart" or requestedAction == "WallRunJump" then
+			return
+		end
+		-- Even if no typed Stop fired, there may still be a leaked mover (e.g. double-tapped before flag set)
+		-- Do a light sweep only if HRP looks dirty.
+		local HRP = self.char and self.char:FindFirstChild("HumanoidRootPart")
+		if HRP then
+			for _, inst in ipairs(HRP:GetChildren()) do
+				if inst:IsA("LinearVelocity") or inst:IsA("BodyVelocity") or inst:IsA("AlignOrientation") then
+					self:CleanupOrphanPhysics()
+					break
+				end
+			end
+		end
+	end
 end
 
 

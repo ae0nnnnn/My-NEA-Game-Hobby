@@ -22,10 +22,14 @@ local VFX_Event: RemoteEvent = Events.VFX
 local WeaponAnims = RS.Animations.Weapons
 
 local ActiveDodges = {}
+local ActiveDives = {}
 local ClimbTimers = {}
+local ActiveSlideTrails = {}
 
 local function CleanupForPlayer(plr)
 	ActiveDodges[plr] = nil
+	ActiveDives[plr] = nil
+	ActiveSlideTrails[plr] = nil
 end
 
 MovementEvent.OnServerEvent:Connect(function(plr, action, ...)
@@ -70,6 +74,10 @@ MovementEvent.OnServerEvent:Connect(function(plr, action, ...)
 			MovementObj.IsActing.WallRunning = true
 		end
 		Validator.ResetJumps(plr)
+		-- Wallrun fall protection: reset peak at start so long glides don't insta-kill on drop
+		pcall(function()
+			require(SS.Modules.Movement.FallDamage).ResetPeak(char)
+		end)
 	end
 
 	if action == "WallRunEnd" then
@@ -173,6 +181,8 @@ MovementEvent.OnServerEvent:Connect(function(plr, action, ...)
 		if MovementObj then
 			MovementObj.States.ISSliding = true
 			Flowmanager.OnSlideStart(MovementObj)
+			VFX_Event:FireAllClients("Trail", char)
+			ActiveSlideTrails[plr] = true
 		end
 	end
 
@@ -180,6 +190,10 @@ MovementEvent.OnServerEvent:Connect(function(plr, action, ...)
 		if MovementObj then
 			MovementObj.States.ISSliding = false
 			Flowmanager.OnSlideEnd(MovementObj, function() end)
+		end
+		if ActiveSlideTrails[plr] then
+			ActiveSlideTrails[plr] = nil
+			VFX_Event:FireAllClients("TrailStop", char)
 		end
 	end
 
@@ -215,6 +229,10 @@ MovementEvent.OnServerEvent:Connect(function(plr, action, ...)
 		-- AUTHORITATIVE AIR STATE (mirrored from the server Humanoid)
 		local isAir = Validator.IsAirborne(plr)
 
+		if isAir then
+			VFX_Event:FireAllClients("Trail", char, MovementData.Data.DodgeDuration)
+		end
+
 		char:SetAttribute("Dodging", true)
 		StatusEffects.RemoveStatusEffect(char, nil, "Burn")
 
@@ -240,6 +258,8 @@ MovementEvent.OnServerEvent:Connect(function(plr, action, ...)
 		-- Now safe to start the flow transition state window
 		Flowmanager.OnDodgeStart(MovementObj)
 		MovementObj.IsActing.Dodging = true
+		char:SetAttribute("Dodging",true)
+	
 
 		local StartTime = workspace:GetServerTimeNow()
 		local StartPosition = HRP.Position
@@ -319,8 +339,89 @@ MovementEvent.OnServerEvent:Connect(function(plr, action, ...)
 		VFX_Event:FireAllClients("Highlight", char, 0.5, Color3.fromRGB(173, 173, 173), Color3.fromRGB(255, 255, 255))
 	end
 
+	if action == "Dive" then
+		-- Dive stance entry: one-time gates, no distance budget (open-ended
+		-- fall, capped client-side to DiveMaxSpeed). Cleared on landing
+		-- (airborne poll below) or DoubleJump. All failures blocked, never kick.
+		if char:GetAttribute("Dodging") == true then
+			return
+		end
+		if Helpful.CheckForAttributes(char, true, true, true, true, false, true, false, false) then
+			return
+		end
+
+		-- Same 20 stamina price as a dodge, shared pool.
+		if Helpful.ManageStamina(char, "Dodge") then
+			warn(string.format("[ANTI-CHEAT] %s Stamina Spoofing for Dive", plr.Name))
+			return
+		end
+
+		local isAir = Validator.IsAirborne(plr)
+		if not isAir then
+			local hrpCheck = char:FindFirstChild("HumanoidRootPart")
+			if not (hrpCheck and hrpCheck.AssemblyLinearVelocity.Y > 5) then
+				return
+			end
+		end
+
+		char:SetAttribute("Dodging", true)
+		StatusEffects.RemoveStatusEffect(char, nil, "Burn")
+
+		Flowmanager.OnDive(MovementObj)
+		MovementObj.IsActing.Dodging = true
+		MovementObj.InfoTable.Dodge.Type = "Dive"
+
+		ActiveDives[plr] = {
+			Token = {},
+			StartTime = workspace:GetServerTimeNow(),
+			StartPos = HRP.Position,
+		}
+		local diveToken = (ActiveDives[plr] :: any).Token
+
+		-- Landing watch: poll airborne state, clear the stance when grounded.
+		-- Failsafe 15s cap so a leaked entry can never stick Dodging on forever.
+		-- Token-guarded: a dive -> double-jump -> second-dive chain must not let
+		-- the first watch clear the second stance.
+		task.spawn(function()
+			local deadline = os.clock() + 15
+			while os.clock() < deadline do
+				local entry = ActiveDives[plr]
+				if not (entry and (entry :: any).Token == diveToken) then
+					break
+				end
+				task.wait(0.1)
+				if not (char and char.Parent) then
+					break
+				end
+				if not Validator.IsAirborne(plr) then
+					local hrpNow = char:FindFirstChild("HumanoidRootPart")
+					if not (hrpNow and hrpNow.AssemblyLinearVelocity.Y > 5) then
+						break
+					end
+				end
+			end
+			local entry = ActiveDives[plr]
+			if not (entry and (entry :: any).Token == diveToken) then
+				-- A newer dive took over (or DoubleJump cleared us): hands off.
+				return
+			end
+			ActiveDives[plr] = nil
+			if char and char.Parent then
+				char:SetAttribute("Dodging", false)
+			end
+			if MovementObj and MovementObj.IsActing then
+				MovementObj.IsActing.Dodging = false
+				if MovementObj.InfoTable and MovementObj.InfoTable.Dodge then
+					MovementObj.InfoTable.Dodge.Type = "None"
+				end
+				Flowmanager.OnDodgeEnd(MovementObj, function() end)
+			end
+		end)
+	end
+
 	if action == "WallRunJump" then
 		VFX_Event:FireAllClients("Highlight", char, 0.4, Color3.fromRGB(255, 240, 240), Color3.fromRGB(235, 235, 235))
+		VFX_Event:FireAllClients("Trail", char, 0.5)
 		Flowmanager.OnMechanicJump(MovementObj, "WallRunJump")
 	end
 
@@ -339,6 +440,18 @@ MovementEvent.OnServerEvent:Connect(function(plr, action, ...)
 		end
 
 		Flowmanager.OnMechanicJump(MovementObj, "DoubleJump")
+
+		-- DoubleJump kills an open dive stance server-side too.
+		if ActiveDives[plr] then
+			ActiveDives[plr] = nil
+		end
+		if char:GetAttribute("Dodging") == true and MovementObj.InfoTable.Dodge.Type == "Dive" then
+			char:SetAttribute("Dodging", false)
+			MovementObj.IsActing.Dodging = false
+			MovementObj.InfoTable.Dodge.Type = "None"
+		end
+
+		VFX_Event:FireAllClients("Trail", char, 0.35)
 
 		-- Server-side bonus window so the dodge anti-cheat budget matches reality.
 		-- os.clock() matches the client's own LastTime timebase (see DoubleJump.lua).

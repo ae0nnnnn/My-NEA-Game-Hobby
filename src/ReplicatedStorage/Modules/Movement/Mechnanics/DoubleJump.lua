@@ -44,6 +44,8 @@ function DoubleJump.Start(MovementObj: ClientTypes.MovementObj)
 		return
 	end
 
+	pcall(function() MovementObj:CancelConflictingActions("DoubleJump") end)
+
 	local D = MovementData.Data
 	local info = MovementObj.InfoTable.DoubleJump
 	if not info then

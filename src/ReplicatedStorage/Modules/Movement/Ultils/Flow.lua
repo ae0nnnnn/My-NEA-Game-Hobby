@@ -32,11 +32,15 @@ local Config = {
     TransitionCushion = 0.12,            
 
     MomentumDecayRate = 4.5,            
-    MaxMomentumBonus = 0.50,            
+    MaxMomentumBonus = 0.30,            
     BaseMomentum = 100,   
 
     MomentumRetainOnCrouch = 0.25,      
     CrouchMomentumDrainMultiplier = 2.5, 
+
+    WallRunMomentumBase = 4,            
+    WallRunMomentumRamp = 0.6,          
+    WallRunMomentumEntry = 0,           
     
     FlowDebug = false,
 }
@@ -81,6 +85,8 @@ local function VerifyFlowStructure(MovementObj: ClientTypes.MovementObj)
         flow.LerpConnection = nil
         flow.LastFlowSent = 1.0
         flow.LastFlowSentTime = 0
+        flow.GlobalSpeedMult = 1
+        flow.WallRunElapsed = 0
 
         ActiveFlows[MovementObj] = flow
     end
@@ -147,6 +153,10 @@ function FlowManager.StartSpeedLerp(MovementObj: ClientTypes.MovementObj)
         elseif MovementObj.States.ISSliding then
             -- the slide loop owns momentum while sliding (flat/uphill drains, downhill gains) --
             -- sprint must NOT refill against it, or flat slides gain momentum.
+        elseif MovementObj.IsActing.WallRunning then
+            flow.WallRunElapsed += dt
+            local rampGain = Config.WallRunMomentumBase + (flow.WallRunElapsed * Config.WallRunMomentumRamp)
+            flow.Momentum = math.min(flow.MaxMomentum, flow.Momentum + (rampGain * dt))
         elseif MovementObj.IsActing.IsEXSprinting then
             flow.Momentum = math.min(flow.MaxMomentum, flow.Momentum + (10 * dt))
         elseif MovementObj.IsActing.IsSprinting then
@@ -160,8 +170,8 @@ function FlowManager.StartSpeedLerp(MovementObj: ClientTypes.MovementObj)
         -- Absolute-base multiplier so a larger AGL-scaled pool actually raises
         -- the top speed bonus instead of just slowing the fill.
         local momentumMultiplier = 1.0 + ((flow.Momentum / Config.BaseMomentum) * Config.MaxMomentumBonus)
-        local finalSpeed = flow.CurrentSpeed * flow.FlowBonus * momentumMultiplier
-        local clampedSpeed = math.clamp(finalSpeed, 0, flow.TargetSpeed * Config.MaxFlowBonus)
+        local finalSpeed = flow.CurrentSpeed * flow.FlowBonus * momentumMultiplier * flow.GlobalSpeedMult
+        local clampedSpeed = math.clamp(finalSpeed, 0, flow.TargetSpeed * Config.MaxFlowBonus* flow.GlobalSpeedMult)
 
         -- GLOBAL MECHANIC DEBUG MONITOR (Throttled to every 100ms)
         local acting = MovementObj.IsActing
@@ -314,7 +324,10 @@ function FlowManager.OnWallRunStart(MovementObj: ClientTypes.MovementObj, wallru
     end
 
     flow.LastChainTime = os.clock()
-    flow.Momentum = math.min(flow.MaxMomentum, flow.Momentum + 10)
+    flow.WallRunElapsed = 0
+    if Config.WallRunMomentumEntry > 0 then
+        flow.Momentum = math.min(flow.MaxMomentum, flow.Momentum + Config.WallRunMomentumEntry)
+    end
 
     local speedMult = wasSprinting and Config.SprintToWallRunBonus or 1.0
     return wallrunSpeed * speedMult
@@ -329,6 +342,7 @@ function FlowManager.OnWallRunEnd(MovementObj: ClientTypes.MovementObj, onSprint
     if not hum then return end
 
     flow.IsTransitioning = false
+    flow.WallRunElapsed = 0
     FlowManager.StoreVelocity(MovementObj, Config.WallRunToSprintCarry)
 
     task.delay(Config.SprintRestoreDelay, function()
@@ -423,6 +437,22 @@ function FlowManager.OnDodgeStart(MovementObj: ClientTypes.MovementObj)
     flow.IsTransitioning = true
 
     
+    FlowManager.StoreVelocity(MovementObj)
+end
+
+function FlowManager.OnDive(MovementObj: ClientTypes.MovementObj)
+    -- Dive stance entry: mirrors OnDodgeStart (sprint intent, transition lock,
+    -- velocity snapshot) but tagged "Dive" so chain accounting stays honest
+    -- and the DoubleJump air-bonus window is never consumed by diving.
+    local flow = VerifyFlowStructure(MovementObj)
+
+    if MovementObj.IsActing.IsSprinting or MovementObj.IsActing.IsEXSprinting then
+        FlowManager.MarkSprinting(MovementObj, true)
+    end
+
+    flow.LastMechanic = "Dive"
+    flow.IsTransitioning = true
+
     FlowManager.StoreVelocity(MovementObj)
 end
 

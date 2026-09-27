@@ -18,6 +18,10 @@ local DoubleJump = require(RS.Modules.Movement.Mechnanics.DoubleJump)
 local MovementData = require(RS.Modules.Movement.Data)
 local SpeedMods = require(RS.Modules.Movement.Ultils.Speed)
 local ClientHelpfull = require(RS.Modules.ClientHelpfull)
+
+local VFXFolder = workspace:WaitForChild("VFX")
+local NPCFolder = workspace:WaitForChild("NPC")
+local CharactersFolder = workspace:WaitForChild("Characters")
 --[Player Variables]--
 local plr = Players.LocalPlayer
 local char = plr.Character or plr.CharacterAdded:Wait()
@@ -221,6 +225,7 @@ local function GrabLedge(ledgeY: number, intoWallDir: Vector3)
 end
 
 local function startClimbPush(wallHit)
+	pcall(function() object:CancelConflictingActions("Climb") end)
 	if object.IsActing.WallRunning then
 		return
 	end
@@ -271,6 +276,16 @@ local function startClimbPush(wallHit)
 	climbBV = bv
 	Debris:AddItem(bv, velocityDecay)
 
+	-- Expose a typed Stop so Movement:CancelConflictingActions("Dodge"/"WallRun"...) can
+	-- cleanly tear down an in-flight climb and clear the local climbBusy flag.
+	object.InfoTable.Climb.Stop = function()
+		if climbBV then pcall(function() climbBV:Destroy() end) climbBV = nil end
+		if climbSetTimer then pcall(function() task.cancel(climbSetTimer) end) climbSetTimer = nil end
+		climbBusy = false
+		object.IsActing.Climbing = false
+		pcall(function() WallClimbAnim:Stop(0.1) end)
+	end
+
 	task.delay(0.2, function()
 		SoundsModule.PlaySound(SFX.SFX.Movement.ClimbSound)
 	end)
@@ -289,7 +304,7 @@ local function startClimbPush(wallHit)
 				Origin = Vector3.new(HRP.Position.X, headY, HRP.Position.Z),
 				Direction = intoWallDir,
 				Range = 5,
-				FilterList = { char },
+				FilterList = { char, VFXFolder, NPCFolder, CharactersFolder },
 			})
 
 			if not r or r.Instance:GetAttribute("NonClimable") == true then
@@ -404,7 +419,7 @@ local function FindFowardwall(char)
 			Origin = origin,
 			Direction = HRP.CFrame.LookVector,
 			Range = MovementData.Data.ClimbDetectionRange,
-			FilterList = { char },
+			FilterList = { char, VFXFolder, NPCFolder, CharactersFolder },
 		})
 
 		if result and result.Instance:GetAttribute("NonClimable") ~= true then
@@ -544,6 +559,11 @@ Hum.StateChanged:Connect(function(_, newState) -- other state stuff
 	elseif newState == Enum.HumanoidStateType.Landed then
 		object.States.IsInAir = false
 		object.States.IsGrounded = true
+		-- Dive dies on landing: tear down the stance mover before reset.
+		-- (DoubleJump already kills it mid-air via CancelConflictingActions.)
+		if object.InfoTable.Dodge and object.InfoTable.Dodge.Type == "Dive" then
+			pcall(function() (object.InfoTable.Dodge.Stop :: () -> ())() end)
+		end
 		DoubleJump.Reset(object)
 		if object.InfoTable.Climb then
 			object.InfoTable.Climb.Used = 0
