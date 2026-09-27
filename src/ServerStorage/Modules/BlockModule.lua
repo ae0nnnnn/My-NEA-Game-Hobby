@@ -20,8 +20,8 @@ local ParryAnims = Combat_Data.ParryAnims
 local SucessfulParry = Combat_Data.SuccessfulParry
 local SuccssfulHypr = Combat_Data.SuccessfulHyprParry
 
-local AP_WINDOW = 0.2
-local AP_CHAIN_WINDOW = 0.15
+local AP_WINDOW = 0.3
+local AP_CHAIN_WINDOW = 0.18
 
 local AP_Table = {}
 
@@ -127,13 +127,13 @@ local function HyprKnockback(Char)
 	local backwardDirection = -HRP.CFrame.LookVector
 
 	-- 1. Restored Impulse Force
-	local popUpwardForce = 22.6
-	local popBackwardForce = 36.1
+	local popUpwardForce = 25
+	local popBackwardForce = 40
 	local impulseVector = (backwardDirection * popBackwardForce) + Vector3.new(0, popUpwardForce, 0)
 	HRP:ApplyImpulse(impulseVector * HRP:GetMass())
 
 	-- 2. Restored LinearVelocity Constraint
-	local slideSpeed = 56.7
+	local slideSpeed = 75
 	local lv = Instance.new("LinearVelocity")
 	lv.Name = "HyprForce"
 	lv.Attachment0 = att
@@ -314,7 +314,7 @@ function module.Parrying(char, eChar, hitPos, npc)
 			:LoadAnimation(WeaponAnimsFolder[char:GetAttribute("CurrentWeapon")].Blocking.GotParried)
 			:Play()
 
-		StunHandler.Stun(char.Humanoid, 1.25, 10, 0)
+		StunHandler.Stun(char.Humanoid, 1.2, 0, 0)
 	end
 
 	eChar.Humanoid.Animator
@@ -383,7 +383,7 @@ function module.GuardBreak(char)
 		VFX_Event:FireClient(plr, "CustomShake", 6, 12, 0, 2)
 	end
 
-	StunHandler.Stun(char.Humanoid, 5)
+	StunHandler.Stun(char.Humanoid, 1.35,0,0)
 end
 
 function module.ActivateBlocking(char, npc)
@@ -400,13 +400,18 @@ function module.ActivateBlocking(char, npc)
 	char:SetAttribute("IsBlocking", true)
 	IntentService.SetIntent(char, npc, "Block")
 
-	local walkSpeed = WeaponStatsModule.getStats(char:GetAttribute("CurrentWeapon")).BlockingWalkSpeed
-
-	hum.WalkSpeed = walkSpeed
-	hum.JumpHeight = 0
-
 	if plr then
+		-- Player: remove hard WalkSpeed=6 slow → just kill sprint via remote, keep jump lock
 		MovementEvent:FireClient(plr, "ForceAction", "StopSprint")
+		hum.JumpHeight = 0
+	else
+		-- NPC: keep Flow-aware slow via GlobalSpeedMult (stacked)
+		local SpeedMods = require(RS.Modules.Movement.Ultils.Speed)
+		local walkBase = SpeedMods.GetMovementSpeed(char, "WalkSpeed", "Walk") or hum.WalkSpeed
+		local blockSpeed = WeaponStatsModule.getStats(char:GetAttribute("CurrentWeapon")).BlockingWalkSpeed
+		local mult = walkBase > 0 and (blockSpeed / walkBase) or 1
+		require(SSModule.Other.Helpful).ApplyGlobalMult(char, "block", mult)
+		hum.JumpHeight = 0
 	end
 end
 
@@ -420,6 +425,9 @@ function module.DeactivateBlocking(char, npc)
 	char:SetAttribute("LastStopTime", tick())
 	IntentService.SetIntent(char, npc, "None")
 
+	if not plr then
+		require(SSModule.Other.Helpful).RemoveGlobalMult(char, "block")
+	end
 	ResetMobility(char)
 end
 

@@ -7,6 +7,8 @@
 
 --||Services||--
 local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local SS = game:GetService("ServerStorage")
 
 --||Ragdoll CFrames (can be changed)||--
 local attachmentCFrames = {
@@ -179,6 +181,38 @@ local function applyRagdollToCharacter(char) --applying the ragdoll
 			char:GetAttributeChangedSignal("IsRagdoll"):Connect(function()
 				if char:GetAttribute("IsRagdoll") then
 					replaceJoints(char, hum)
+					-- Ragdoll gate: force-cancel any active wallrun movers (both PLR and NPC)
+					pcall(function()
+						local Movement = require(RS.Modules.Movement.Objects.Movement)
+						local mov = nil
+						local plr = Players:GetPlayerFromCharacter(char)
+						if plr then
+							mov = Movement.GetMovementObj(plr)
+						else
+							-- NPC path: identifier is npc object table
+							local ok, npcMod = pcall(require, SS.Modules.Objects.npc)
+							if ok and npcMod and npcMod.GetNpcFromCharacter then
+								local npcObj = npcMod.GetNpcFromCharacter(char)
+								if npcObj then
+									mov = Movement.GetMovementObj(npcObj)
+								end
+							end
+						end
+						if mov then
+							mov:CancelConflictingActions("Ragdoll")
+							mov:CleanupOrphanPhysics()
+						else
+							-- Fallback: direct HRP sweep if no MovementObj found (e.g. race)
+							local hrp = char:FindFirstChild("HumanoidRootPart")
+							if hrp then
+								for _, inst in ipairs(hrp:GetChildren()) do
+									if inst.Name == "WallRunAttachment" or inst:IsA("LinearVelocity") or inst:IsA("AlignOrientation") then
+										pcall(function() inst:Destroy() end)
+									end
+								end
+							end
+						end
+					end)
 				else
 					resetJoints(hum)
 				end

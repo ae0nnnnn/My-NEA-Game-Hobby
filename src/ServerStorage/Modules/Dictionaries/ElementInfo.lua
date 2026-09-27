@@ -1,7 +1,7 @@
 
 local module = {}
 local info ={
-	["Bone"]={
+	["Time"]={
 		Mode1 = "DrakeFang",
 		Mode2 = "TwinSpears",
 		Mode2Callout = "...",

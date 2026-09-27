@@ -3,6 +3,7 @@ local SlashStorm = {}
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local SS = game:GetService("ServerStorage")
+local ServerStorage = game:GetService("ServerStorage")
 local SoundService = game:GetService("SoundService")
 
 local SSModules = SS.Modules
@@ -14,7 +15,6 @@ local StatFormulas = require(SSModules.Other.StatFormulas)
 local WeaponStats = require(SSModules.Dictionaries.WeaponStats)
 local IntentService = require(SSModules.Combat.IntentService)
 local NpcModule = require(SSModules.Objects.npc)
-
 local VFX_Event = Events.VFX
 local SoundsModule = require(RS.Modules.Combat.SoundsModule)
 local WeaponSounds = SoundService.SFX.Weapons

@@ -51,10 +51,6 @@ function module.Normal_Hitbox(char, weapon, eHum, npc, Hit, ...)
 		local Eplr = game.Players:GetPlayerFromCharacter(eChar)
 		local Enpc = GetNPCFromCharacter(eChar)
 		local attackerNpcObject = GetNPCFromCharacter(char)
-		local DEF_AIObj = nil
-		if Enpc then
-			DEF_AIObj = Enpc.AIObject
-		end
 
 		local eHRP = eChar.HumanoidRootPart
 
@@ -93,35 +89,27 @@ function module.Normal_Hitbox(char, weapon, eHum, npc, Hit, ...)
 
 		--Misc Varibles
 		local Knockback = WeaponStats.Knockback
-		--local RagdollTime = WeaponStats.RagdollTime
 		local stunTime = WeaponStats.StunTime
 
-		if DEF_AIObj then
-			local isSwinging = eChar:GetAttribute("Swing") == true
-			local isAttacking = eChar:GetAttribute("Attacking") == true
 
-			if not isSwinging and not isAttacking then
-				if DEF_AIObj.HyprParryChance and math.random() < DEF_AIObj.HyprParryChance then
-					eChar:SetAttribute("HyprParrying", true)
-					return "HyprParried"
-				elseif DEF_AIObj.ParryChance and math.random() < DEF_AIObj.ParryChance then
-					eChar:SetAttribute("Parrying", true)
-					return "Parried"
-				end
+		-- Pack-only friendly fire: same ActiveGroup members never damage each other (other packs can)
+		do
+			local victimGroupNameForHit = Enpc and Enpc.GetGroupName and Enpc:GetGroupName() or nil
+			local attackerGroupNameForHit = attackerNpcObject and attackerNpcObject.GetGroupName and attackerNpcObject:GetGroupName() or nil
+			if victimGroupNameForHit and attackerGroupNameForHit and victimGroupNameForHit == attackerGroupNameForHit then
+				return "FriendlyFire"
 			end
 		end
 
 		local stop, result =
 			HelpfulModule.CheckForStatus(eChar, char, Enpc, BaseDmg, Hit.CFrame, true, true, true, true)
-		print(result, "helpful result")
 		if stop then
 			return result
 		end
 
-		local PassiveCheckDmg, isCrit, damageAlreadydealt =
-			PassiveManger.M1LandedPassive(attackerObj, defenderObj, Truedamage, STAT_POINTS)
+		local PassiveCheckDmg, isCrit, damageAlreadydealt = PassiveManger.M1LandedPassive(attackerObj, defenderObj, Truedamage, STAT_POINTS)
 
-		print(PassiveCheckDmg)
+	
 
 		if damageAlreadydealt == false then
 			HelpfulModule.DamageDealer(eChar, PassiveCheckDmg)
@@ -133,6 +121,16 @@ function module.Normal_Hitbox(char, weapon, eHum, npc, Hit, ...)
 
 		if Enpc and Enpc.AIObject and Enpc.AIObject.Threats then
 			Threarts.RegisterDamage(Enpc.AIObject, char, PassiveCheckDmg)
+		end
+		-- Pack Tactics: elect Aggressor by last hit (Addendum B) — lazy require to avoid npc -> HitService cycle
+		if Enpc and Enpc.GetGroupName then
+			local groupNameForPack = Enpc:GetGroupName()
+			if groupNameForPack then
+				local success, npcModuleForPack = pcall(require, SSModules.Objects.npc)
+				if success and npcModuleForPack and npcModuleForPack.NotifyHit then
+					pcall(function() npcModuleForPack.NotifyHit(groupNameForPack, Enpc, char) end)
+				end
+			end
 		end
 		eChar:SetAttribute("InCombat", true)
 		local KarmaDamage = 0
@@ -188,13 +186,59 @@ function module.Normal_Hitbox(char, weapon, eHum, npc, Hit, ...)
 			-- TODO: Replace the aboove with the element object rather than a pure module
 		elseif char:GetAttribute("Combo") >= 4 then
 			Knockback = Knockback * 9
-			--HelpfulModule.Ragdoll(eChar,RagdollTime)
 		end
 
 		module.BodyVelocity(eHRP, char.HumanoidRootPart, Knockback, 0.3)
 
 		StunHandler.Stun(eHum, stunTime,0,0)
-		print(result)
+		return result
+	end
+
+	return "Missed"
+end
+
+function module.Revenge_Hitbox(char, weapon, eHum, npc, Hit, ...)
+	local hitAnim = ...
+	local Truehit = hitAnim
+	local plrModule = require(SSModules.Objects.plr)
+
+	if eHum and eHum.Parent ~= char then
+		local eChar = eHum.Parent
+		local Eplr = game.Players:GetPlayerFromCharacter(eChar)
+		local Enpc = GetNPCFromCharacter(eChar)
+
+		local BaseDmg = 20
+
+		local stop, result =
+			HelpfulModule.CheckForStatus(eChar, char, Enpc, BaseDmg, Hit.CFrame, true, true, true, true)
+		if stop and result ~= "HitLanded" then
+			return result
+		end
+
+		HelpfulModule.DamageDealer(eChar, BaseDmg)
+
+		local revengeDefenderObj = Eplr and plrModule.GetPLRFromPlayer(Eplr)
+		local revengeDefenderDodges = 0
+		if revengeDefenderObj and revengeDefenderObj.Element then
+			revengeDefenderDodges = revengeDefenderObj.Element.Data.Dodges or 0
+		elseif Enpc and Enpc.Element then
+			revengeDefenderDodges = Enpc.Element.Data.Dodges or 0
+		end
+
+		if revengeDefenderDodges and revengeDefenderDodges > 1 then
+			local hitAnimDodge = WeaponsAnimations.TwinSpears.Dodge["Dodge" .. char:GetAttribute("Combo")]
+			eHum.Animator:LoadAnimation(hitAnimDodge):Play()
+			VFX_Event:FireAllClients("AfterImage", eChar, hitAnimDodge, nil)
+		else
+			eHum.Animator:LoadAnimation(Truehit):Play()
+		end
+
+		SoundsModule.PlaySound(WeaponSounds[weapon].Combat.Hit, eChar.Torso)
+		VFX_Event:FireAllClients("CombatEffects", RS.Effects.Combat.Blood, Hit.CFrame, 3)
+		VFX_Event:FireAllClients("Highlight", eChar, 0.5, Color3.fromRGB(255, 255, 255), Color3.fromRGB(246, 211, 211))
+
+		module.BodyVelocity(eChar.HumanoidRootPart, char.HumanoidRootPart, 12, 0.2)
+		StunHandler.Stun(eChar.Humanoid, 0.35, 0, 0)
 		return result
 	end
 

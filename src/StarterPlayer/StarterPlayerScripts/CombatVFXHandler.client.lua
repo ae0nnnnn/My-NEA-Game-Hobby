@@ -1,6 +1,25 @@
+print([[
+
+
+▀███▄   ▀███▀████▀████▀  ▀████▀▀████▀████▀     ▄▄█▀▀██▄ ▀████▄     ▄███▀███▄   ▀███▀████▀     ██      
+  ███▄    █   ██   ██      ██    ██   ██     ▄██▀    ▀██▄ ████    ████   ███▄    █   ██      ▄██▄     
+  █ ███   █   ██   ██      ██    ██   ██     ██▀      ▀██ █ ██   ▄█ ██   █ ███   █   ██     ▄█▀██▄    
+  █  ▀██▄ █   ██   ██████████    ██   ██     ██        ██ █  ██  █▀ ██   █  ▀██▄ █   ██    ▄█  ▀██    
+  █   ▀██▄█   ██   ██      ██    ██   ██     ▄█▄      ▄██ █  ██▄█▀  ██   █   ▀██▄█   ██    ████████   
+  █     ███   ██   ██      ██    ██   ██    ▄███▄    ▄██▀ █  ▀██▀   ██   █     ███   ██   █▀      ██  
+▄███▄    ██ ▄████▄████▄  ▄████▄▄████▄█████████ ▀▀████▀▀ ▄███▄ ▀▀  ▄████▄███▄    ██ ▄████▄███▄   ▄████▄
+]])
+
+
+
+
+
+
+
+
+
+
 local RS = game:GetService("ReplicatedStorage")
-local TS = game:GetService("TweenService")
-local Debris = game:GetService("Debris") 
 
 local Events = RS.Events
 local Modules = RS.Modules
@@ -33,14 +52,22 @@ Events.VFX.OnClientEvent:Connect(function(action,...)
 	end
 
 	if action == "Trail" then
-		local target = ... 
+		local char, duration = ...
+		CombatEffectsModule.Trail(char, duration) 
 		
+	end
+
+	if action == "TrailStop" then
+		local char = ...
+		CombatEffectsModule.StopTrails(char)
 	end
 
 	if action == "HyprParry" then 
 		local char,echar = ...
-		CombatEffectsModule.HyprVfx(char,echar,true)
-		CombatEffectsModule.HyprVfx(echar,char,false)
+		-- char = attacker (got parried), echar = defender (parrier / revenge holder)
+		-- defender gets full cam+bars (isMainSource=true), attacker gets highlight only so they can hypr-parry the revenge
+		CombatEffectsModule.HyprVfx(echar,char,true)
+		CombatEffectsModule.HyprVfx(char,echar,false)
 	end
 	
 	if	action == "Highlight" then
@@ -55,8 +82,9 @@ Events.VFX.OnClientEvent:Connect(function(action,...)
 	end
 
 	if action == "HyprIndicator" then
-		local cframe = ...
+		local char,cframe = ...
 		local effect = RS.Effects.Combat.HyprIndicator
+		CombatEffectsModule.Highlight(char,0.5,Color3.new(0.980392, 0.572549, 0.003922),Color3.new(0.980392, 0.572549, 0.003922),true)
 		CombatEffectsModule.EmitEffect(effect, cframe)
 	end
 

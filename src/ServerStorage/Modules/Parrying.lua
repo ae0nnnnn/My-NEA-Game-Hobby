@@ -55,28 +55,30 @@ function ParryModule.ParryAttempt(char, npc)
 	local plr = Players:GetPlayerFromCharacter(char)
 	if plr then
 		MovementEvent:FireClient(plr, "ForceAction", "StopSprint")
+	else
+		-- NPC keeps Flow-aware slow via GlobalSpeedMult (stacked, so Astral not clobbered)
+		HelpfullModule.ApplyGlobalMult(char, "parry", 1 / 2.5) 
+		hum.JumpHeight = 0
+	end
+	if plr then
+		-- Player slow removed entirely: sprint-off remote is sufficient; keep jump lock if desired
+		hum.JumpHeight = 0
 	end
 	IntentService.SetIntent(char, npc, "Parry")
 	
 	ParryAnims[Identifer] = hum:LoadAnimation(WeaponAnimsFolder[currentWeapon].Blocking.TryParry)
 	ParryAnims[Identifer]:Play()
 	
-	if not ParryCD.Hypr[Identifer] or tick() - ParryCD.Hypr[Identifer] >  2 then  -- Reversing the if statment to see if that works 
+	if not ParryCD.Hypr[Identifer] or tick() - ParryCD.Hypr[Identifer] > 1.325 then -- Reversing the if statment to see if that works 
 		char:SetAttribute("HyprParry", true)
-		VFX_Event:FireAllClients("HighlightBlink", WeaponModel, Color3.new(0.980392, 0.380392, 0.003922), 0.1, 2)	
+		VFX_Event:FireAllClients("HighlightBlink", WeaponModel, Color3.new(0.980392, 0.572549, 0.003922), 0.1, 0.1)
 		print(char:GetAttribute("HyprParry"))
 	end
-	
-	
-	hum.WalkSpeed = (StarterPlayer.CharacterWalkSpeed / 2.5)
-	hum.JumpHeight = 0
 
 
 
 	ParryAnims[Identifer]:GetMarkerReachedSignal("HyprParryOver"):Connect(function()
 		char:SetAttribute("HyprParry", false)
-		print("HYPROVER")
-		print("HELLPPPPPPPP meememememememe")
 		ParryCD.Hypr[Identifer] = tick()
 	end)
 
@@ -89,6 +91,7 @@ function ParryModule.ParryAttempt(char, npc)
 		IntentService.SetIntent(char, npc, "None")
 
 		if HyprSucess[Identifer] then
+			if not plr then HelpfullModule.RemoveGlobalMult(char, "parry") end
 			HelpfullModule.ResetMobility(char)
 			char:SetAttribute("Parrying", false)
 			char:SetAttribute("HyprParry", false)
@@ -101,6 +104,7 @@ function ParryModule.ParryAttempt(char, npc)
     
 
 		if Success[Identifer] then
+			if not plr then HelpfullModule.RemoveGlobalMult(char, "parry") end
 			HelpfullModule.ResetMobility(char)
 			char:SetAttribute("Parrying", false)
 			char:SetAttribute("Stunned", false)
@@ -110,7 +114,7 @@ function ParryModule.ParryAttempt(char, npc)
 		end
 
 	
-
+		if not plr then HelpfullModule.RemoveGlobalMult(char, "parry") end
 		HelpfullModule.ResetMobility(char)
 		char:SetAttribute("Stunned", false)
 

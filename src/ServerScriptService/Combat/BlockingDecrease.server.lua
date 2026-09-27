@@ -116,9 +116,9 @@ local function CheckForStatus(char)
     local Swing = char:GetAttribute("Swing")
     local Dodging = char:GetAttribute("Dodging")
     local IsEXSprinting = char:GetAttribute("IsEXSprinting")
-    local Sprinting = char:GetAttribute("Sprinting")
 
-    if Swing or Dodging or IsEXSprinting  then
+    -- Only hard actions block regen now: swing, dodge, EX sprint. Sprinting and Blocking do NOT block (user asked - was annoying)
+    if Swing or Dodging or IsEXSprinting then
         char:SetAttribute("StopTime_Stam", os.clock())
         return true
     end

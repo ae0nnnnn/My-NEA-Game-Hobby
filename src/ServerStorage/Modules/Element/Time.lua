@@ -1,5 +1,5 @@
-local Bone = {}
-Bone.__index = Bone
+local Time = {}
+Time.__index = Time
 local RS = game:GetService("ReplicatedStorage")
 local SS = game:GetService("ServerStorage")
 local TweenService = game:GetService("TweenService")
@@ -17,7 +17,7 @@ local EquipDebounce = Combat_Data.EquipDebounce
 local ServerTypes = require(SSModules.ServerTypes)
 type ElementBase = ServerTypes.ElementBase
 
-type BoneData = {
+type TimeData = {
 	Dodges: number,
 	Mode1Weapon: string,
 	Mode2Weapon: string,
@@ -28,6 +28,8 @@ type BoneData = {
 	WeaponSwapAnimation: AnimationTrack?,
 	DidSwap: boolean,
 	WeaponArsenal: { string },
+	LastHitStat: string?,
+	Knowledge: number
 }
 
 type ElementBaseNoData = {
@@ -43,19 +45,25 @@ type ElementBaseNoData = {
 	RevengeCounter: ((self: ElementBase, char: Model, target: Model) -> ())?,
 }
 
-export type BoneObject = ElementBaseNoData & { Data: BoneData }
+export type TimeObject = ElementBaseNoData & { Data: TimeData }
 
 local function GetNPCFromCharacter(char)
 	local plr = game.Players:GetPlayerFromCharacter(char)
-	if plr then return nil end
+	if plr then
+		return nil
+	end
 	local npcModule = require(SSModules.Objects.npc)
 	return npcModule.GetNpcFromCharacter(char)
 end
 
-function Bone.new(): BoneObject
+local CONFIG = {
+	HilightColour = Color3.new(0.211765, 0.015686, 0.352941),
+}
+
+function Time.new(): TimeObject
 	local self = (
 		setmetatable({
-			Name = "Bone" :: "Bone",
+			Name = "Time" :: "Time",
 			Data = {
 				Dodges = 0,
 				Mode1Weapon = "DrakeFang",
@@ -79,29 +87,24 @@ function Bone.new(): BoneObject
 					"Glock",
 				},
 			},
-		}, Bone) :: any
-	) :: BoneObject
+		}, Time) :: any
+	) :: TimeObject
 	return self
 end
 
-local function Innate(self: BoneObject, char: Model) end
-
-local function Mode1Init(self: BoneObject, char: Model) end
-
-local function Mode2Init(self: BoneObject, char: Model)
-	self.Data.Dodges = 21
-end
-
-
-local function Mode1_R(self: BoneObject, char: Model)
+local function Mode1_R(self: TimeObject, char: Model)
 	local plr = game.Players:GetPlayerFromCharacter(char)
 	local hum = char:FindFirstChildOfClass("Humanoid")
 	local torso = char:FindFirstChild("Torso")
 	local rightArm = char:FindFirstChild("Right Arm")
 	local HelpfullModule = require(SSModules.Other.Helpful)
 	local Identifier = plr or GetNPCFromCharacter(char)
-	if not Identifier then return end
-	if EquipDebounce[Identifier] then return end
+	if not Identifier then
+		return
+	end
+	if EquipDebounce[Identifier] then
+		return
+	end
 	if self.Data.Connection then
 		self.Data.Connection:Disconnect()
 	end
@@ -109,51 +112,62 @@ local function Mode1_R(self: BoneObject, char: Model)
 	local TargetWeapon = self.Data.WeaponArsenal[CharWeaponCounter]
 	EquipDebounce[Identifier] = true
 	char:SetAttribute("IsTransforming", true)
-	self.Data.WeaponSwapAnimation = hum:LoadAnimation(WeaponsAnimations.Transformations.Bone.WeaponSwap)
-	self.Data.Connection = self.Data.WeaponSwapAnimation
-		:GetMarkerReachedSignal("Swap")
-		:Connect(function()
-			self.Data.DidSwap = true
-			for _, anim in ipairs(hum.Animator:GetPlayingAnimationTracks()) do
-				if anim.Name == "Swing1" or anim.Name == "Swing2" or anim.Name == "Swing3" or anim.Name == "Swing4" then
-					return
-				end
-			end
-			if HelpfullModule.CheckForAttributes(char, true, true, false, true, true, true, true, nil, true) then return end
-			char:SetAttribute("CurrentWeapon", TargetWeapon)
-			for _, weapon in ipairs(WeaponsModels:GetChildren()) do
-				local existing = char:FindFirstChild(weapon.Name)
-				if existing then
-					existing:Destroy()
-				end
-			end
-			HelpfullModule.ChangeWeapon(Identifier, char, torso)
-			if Welds[Identifier] then
-				Welds[Identifier].Part0 = rightArm
-				Welds[Identifier].C0 = WeaponsWeld[TargetWeapon].HoldingWeaponWeld.C0
-			end
-			IdleAnims[Identifier] = hum.Animator:LoadAnimation(WeaponsAnimations[TargetWeapon].Main.Idle)
-			EquipAnims[Identifier] = hum.Animator:LoadAnimation(WeaponsAnimations[TargetWeapon].Main.Equip)
-			char:SetAttribute("IsTransforming", false)
-			EquipDebounce[Identifier] = false
-			if IdleAnims[Identifier] then
-				IdleAnims[Identifier]:Play()
-			end
-			self.Data.WeaponCounter = self.Data.WeaponCounter + 1
-			if self.Data.WeaponCounter > 4 then
-				self.Data.WeaponCounter = 1
-			end
-			self.Data.Connection:Disconnect()
-			self.Data.Connection = nil
-		end)
-	self.Data.WeaponSwapAnimation.Stopped:Connect(function()
-		if self.Data.DidSwap then return end
+	self.Data.WeaponSwapAnimation = hum:LoadAnimation(WeaponsAnimations.Transformations.Time.WeaponSwap)
+	if not self.Data.WeaponSwapAnimation then
+		return
+	end
+	self.Data.Connection = self.Data.WeaponSwapAnimation:GetMarkerReachedSignal("Swap"):Connect(function()
+		self.Data.DidSwap = true
 		for _, anim in ipairs(hum.Animator:GetPlayingAnimationTracks()) do
 			if anim.Name == "Swing1" or anim.Name == "Swing2" or anim.Name == "Swing3" or anim.Name == "Swing4" then
 				return
 			end
 		end
-		if HelpfullModule.CheckForAttributes(char, true, true, false, true, true, true, nil, nil, true) then return end
+		if HelpfullModule.CheckForAttributes(char, true, true, false, true, true, true, true, nil, true) then
+			return
+		end
+		char:SetAttribute("CurrentWeapon", TargetWeapon)
+		for _, weapon in ipairs(WeaponsModels:GetChildren()) do
+			local existing = char:FindFirstChild(weapon.Name)
+			if existing then
+				existing:Destroy()
+			end
+		end
+		HelpfullModule.ChangeWeapon(Identifier, char, torso)
+		if Welds[Identifier] then
+			Welds[Identifier].Part0 = rightArm
+			Welds[Identifier].C0 = WeaponsWeld[TargetWeapon].HoldingWeaponWeld.C0
+		end
+		IdleAnims[Identifier] = hum.Animator:LoadAnimation(WeaponsAnimations[TargetWeapon].Main.Idle)
+		EquipAnims[Identifier] = hum.Animator:LoadAnimation(WeaponsAnimations[TargetWeapon].Main.Equip)
+		char:SetAttribute("IsTransforming", false)
+		EquipDebounce[Identifier] = false
+		if IdleAnims[Identifier] then
+			IdleAnims[Identifier]:Play()
+		end
+		self.Data.WeaponCounter = self.Data.WeaponCounter + 1
+		if self.Data.WeaponCounter > 4 then
+			self.Data.WeaponCounter = 1
+		end
+
+		if self.Data.Connection then
+			self.Data.Connection:Disconnect()
+		end
+
+		self.Data.Connection = nil
+	end)
+	self.Data.WeaponSwapAnimation.Stopped:Connect(function()
+		if self.Data.DidSwap then
+			return
+		end
+		for _, anim in ipairs(hum.Animator:GetPlayingAnimationTracks()) do
+			if anim.Name == "Swing1" or anim.Name == "Swing2" or anim.Name == "Swing3" or anim.Name == "Swing4" then
+				return
+			end
+		end
+		if HelpfullModule.CheckForAttributes(char, true, true, false, true, true, true, nil, nil, true) then
+			return
+		end
 		char:SetAttribute("CurrentWeapon", TargetWeapon)
 		for _, weapon in ipairs(WeaponsModels:GetChildren()) do
 			local existing = char:FindFirstChild(weapon.Name)
@@ -181,34 +195,90 @@ local function Mode1_R(self: BoneObject, char: Model)
 	end)
 end
 
-local function Mode1_Z(self: BoneObject, char: Model) end
-local function Mode1_X(self: BoneObject, char: Model) end
-local function Mode1_C(self: BoneObject, char: Model) end
-local function Mode2_R(self: BoneObject, char: Model) end
-local function Mode2_Z(self: BoneObject, char: Model) end
-local function Mode2_X(self: BoneObject, char: Model) end
-local function Mode2_C(self: BoneObject, char: Model) end
-local function Mode1_V(self: BoneObject, char: Model) end
-local function Mode2_V(self: BoneObject, char: Model) end
+local function Mode1_Z(self: TimeObject, char: Model) end
+local function Mode1_X(self: TimeObject, char: Model) end
+local function Mode1_C(self: TimeObject, char: Model) end
+local function Mode2_R(self: TimeObject, char: Model) end
+local function Mode2_Z(self: TimeObject, char: Model) end
+local function Mode2_X(self: TimeObject, char: Model) end
+local function Mode2_C(self: TimeObject, char: Model) end
+local function Mode1_V(self: TimeObject, char: Model) end
+local function Mode2_V(self: TimeObject, char: Model) end
 
-function Bone:Innate(char: Model)
-	Innate(self, char)
+function Time:Innate(char: Model)
+	print("Yol")
 end
 
-function Bone:Mode1Init(char: Model)
-	Mode1Init(self, char)
+function Time:Mode1Init(char: Model) end
+
+function Time:Mode2Init(char: Model)
+	if not char then
+		return
+	end
+	self.Data.Dodges = 21
+
+	local function pickpart(): BasePart -- I know this is ineffeucet but lets leave it for now
+		local Selection = {}
+		for _, item in char:GetDescendants() do
+			if item:IsA("BasePart") then
+				table.insert(Selection, item)
+			end
+		end
+
+		local poniter = math.random(1, #Selection)
+		return Selection[poniter]
+	end
+
+	local hl1 = Instance.new("Highlight", RS)
+	hl1.DepthMode = Enum.HighlightDepthMode.Occluded
+	hl1.OutlineTransparency = 1
+	hl1.FillColor = CONFIG.HilightColour
+	hl1.OutlineColor = CONFIG.HilightColour
+	hl1.FillTransparency = -74
+
+	local hl2 = hl1:Clone()
+	hl2.Parent = RS
+
+	local hl3 = hl1:Clone()
+	hl3.Parent = RS
+
+	task.spawn(function()
+		while char do
+			local part1 = pickpart()
+			local part2 = pickpart()
+			local part3 = pickpart()
+
+			while part1 == part2 do
+				part2 = pickpart()
+			end
+
+			while part3 == part1 or part3 == part2 do
+				part3 = pickpart()
+			end
+
+			hl1.Adornee = part1
+			hl2.Adornee = part2
+			hl3.Adornee = part3
+
+			local rng = Random.new()
+			local waitTime = rng:NextNumber(0.05, 0.1)
+			task.wait(waitTime)
+		end
+	end)
 end
 
-function Bone:Mode2Init(char: Model)
-	Mode2Init(self, char)
-end
-
-function Bone.DodgeRandomTP(Target: Model, Attacker: Model)
-	if not Target or not Target:IsA("Model") then return end
-	if not Attacker or not Attacker:IsA("Model") then return end
+function Time.DodgeRandomTP(Target: Model, Attacker: Model)
+	if not Target or not Target:IsA("Model") then
+		return
+	end
+	if not Attacker or not Attacker:IsA("Model") then
+		return
+	end
 	local targetRoot = Target:FindFirstChild("HumanoidRootPart")
 	local attackerRoot = Attacker:FindFirstChild("HumanoidRootPart")
-	if not targetRoot or not attackerRoot then return end
+	if not targetRoot or not attackerRoot then
+		return
+	end
 	local MIN_RADIUS = 20
 	local MAX_RADIUS = 50
 	local originalParts = {}
@@ -239,7 +309,7 @@ function Bone.DodgeRandomTP(Target: Model, Attacker: Model)
 		local tweenTime = math.random(15, 35) / 100
 		local goal = {
 			CFrame = data.CFrame * CFrame.new(0, yOffset, 0) * CFrame.Angles(rotX, rotY, rotZ),
-			Transparency = 1
+			Transparency = 1,
 		}
 		local tweenInfo = TweenInfo.new(tweenTime, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 		local tween = TweenService:Create(clone, tweenInfo, goal)
@@ -259,12 +329,11 @@ function Bone.DodgeRandomTP(Target: Model, Attacker: Model)
 		return targetRoot.Position
 	end
 	targetRoot.CFrame = CFrame.new(getValidPosition())
-	
 end
 
-function Bone:RevengeCounter(char: Model, target: Model) end
+function Time:RevengeCounter(char: Model, target: Model) end
 
-function Bone:R(char: Model)
+function Time:R(char: Model)
 	if char:GetAttribute("Mode2") then
 		Mode2_R(self, char)
 	elseif char:GetAttribute("Mode1") then
@@ -272,7 +341,7 @@ function Bone:R(char: Model)
 	end
 end
 
-function Bone:Z(char: Model)
+function Time:Z(char: Model)
 	if char:GetAttribute("Mode2") then
 		Mode2_Z(self, char)
 	elseif char:GetAttribute("Mode1") then
@@ -280,7 +349,7 @@ function Bone:Z(char: Model)
 	end
 end
 
-function Bone:X(char: Model)
+function Time:X(char: Model)
 	if char:GetAttribute("Mode2") then
 		Mode2_X(self, char)
 	elseif char:GetAttribute("Mode1") then
@@ -288,15 +357,15 @@ function Bone:X(char: Model)
 	end
 end
 
-function Bone:C(char: Model)
+function Time:C(char: Model)
 	if char:GetAttribute("Mode2") then
 		Mode2_C(self, char)
 	elseif char:GetAttribute("Mode1") then
-		Mode1_C(self, char)
+		Mode2_C(self, char)
 	end
 end
 
-function Bone:V(char: Model)
+function Time:V(char: Model)
 	if char:GetAttribute("Mode2") then
 		Mode2_V(self, char)
 	elseif char:GetAttribute("Mode1") then
@@ -304,4 +373,4 @@ function Bone:V(char: Model)
 	end
 end
 
-return Bone
+return Time

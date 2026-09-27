@@ -2,9 +2,12 @@ local Astral = {}
 Astral.__index = Astral
 
 local SS = game:GetService("ServerStorage")
+local ServerStorage = game:GetService("ServerStorage")
 local ServerTypes = require(SS.Modules.ServerTypes)
-type ElementBase = ServerTypes.ElementBase
+local Helpful = require(ServerStorage.Modules.Other.Helpful)
 
+
+type ElementBase = ServerTypes.ElementBase
 type ElementBaseNoData = {
 	Name: string,
 	R: (self: ElementBase, char: Model) -> (),
@@ -24,11 +27,13 @@ type AstralData = {
 	Mode1Weapon: string,
 	Mode2Weapon: string,
 	Dialogue: { string },
+	Type: string
 }
 
 export type AstralObject = ElementBaseNoData & { Data: AstralData }
 
 function Astral.new(): AstralObject
+	print("Astra")
 	local self = (
 		setmetatable({
 			Name = "Astral" :: "Astral",
@@ -36,6 +41,7 @@ function Astral.new(): AstralObject
 				Mode1Weapon = "Fractured_Kunai",
 				Mode2Weapon = "ShootingStar",
 				Dialogue = { "Hello" },
+				Type = "Elemental"
 			},
 		}, Astral) :: any
 	) :: AstralObject
@@ -83,6 +89,8 @@ function Astral:Mode1Init(char: Model)
 end
 
 function Astral:Mode2Init(char: Model)
+	print("YO")
+	Helpful.ApplyGlobalMult(char, "astral", 1.25)
 	
 end
 

@@ -1,6 +1,7 @@
 local module = {}
 local RS = game:GetService("ReplicatedStorage")
 local SS = game:GetService("ServerStorage")
+local ServerStorage = game:GetService("ServerStorage")
 local SSModules = SS.Modules
 
 -- Module references
@@ -9,6 +10,7 @@ local HelpfulModule = require(SSModules.Other.Helpful)
 local StatFormulas = require(SSModules.Other.StatFormulas)
 local Textmod = require(RS.Modules.text)
 local Combat_Data = require(SSModules.Combat.Data.CombatData)
+
 
 -- Tables
 local Welds = Combat_Data.Welds
@@ -24,6 +26,35 @@ local WeaponsModels = Models.Weapons
 local WeaponsWeld = RS.Welds.Weapons
 local WeaponsAnimations = RS.Animations.Weapons
 local TransformConnections = {}
+
+-- Resolves the real ElementObject via PLR/NPC instance, not just the string attribute.
+-- Lazy-requires inside the function to avoid circular plr -> Mode_Module -> plr.
+local function getElementObj(char: Model, npc: any?): any?
+	-- Fast path: npc param already carries .Element (npc.lua passes self)
+	if npc and typeof(npc) == "table" and (npc :: any).Element ~= nil then
+		return (npc :: any).Element
+	end
+	-- Try PLR lookup via Player -> PLR object
+	local plr = game.Players:GetPlayerFromCharacter(char)
+	if plr then
+		local ok, plrMod = pcall(require, SSModules.Objects.plr)
+		if ok and plrMod and plrMod.GetPLRFromPlayer then
+			local ok2, plrObj = pcall(plrMod.GetPLRFromPlayer, plr)
+			if ok2 and plrObj and (plrObj :: any).Element then
+				return (plrObj :: any).Element
+			end
+		end
+	end
+	-- Fallback: NPC lookup via Character -> NPC object (covers char without npc param, e.g. Revert)
+	local ok3, npcMod = pcall(require, SSModules.Objects.npc)
+	if ok3 and npcMod and npcMod.GetNpcFromCharacter then
+		local ok4, npcObj = pcall(npcMod.GetNpcFromCharacter, char)
+		if ok4 and npcObj and (npcObj :: any).Element then
+			return (npcObj :: any).Element
+		end
+	end
+	return nil
+end
 
 local function MakeWeaponInvisible(char, Weapon)
 	if not Weapon and char then
@@ -107,7 +138,7 @@ function module.Mode1(char, npc)
 	end
 
 	EquipDebounce[Identifier] = true
-	char:SetAttribute("iframes", true)
+	char:SetAttribute("Iframes", true)
 	char:SetAttribute("IsTransforming", true)
 
 	local element = char:GetAttribute("Element")
@@ -115,8 +146,9 @@ function module.Mode1(char, npc)
 		warn("[Mode_Module] Element attribute is invalid for character: " .. char.Name)
 		return
 	end
+	local elemObj = getElementObj(char, npc)
 	local elementStats = ElementInfo.getStats(element)
-	local newWeapon = elementStats.Mode1
+	local newWeapon = (elemObj and elemObj.Data and elemObj.Data.Mode1Weapon) or elementStats.Mode1
 	TransformAnims[Identifier] = hum.Animator:LoadAnimation(WeaponsAnimations.Transformations[element].Mode1)
 	rootPart.Anchored = true
 	TransformAnims[Identifier]:Play()
@@ -172,8 +204,16 @@ function module.Mode1(char, npc)
 		rootPart.Anchored = false
 		char:SetAttribute("IsTransforming", false)
 		char:SetAttribute("Equipped", true)
-		char:SetAttribute("iframes", false)
+		char:SetAttribute("Iframes", false)
 		char:SetAttribute("Mode1", true)
+
+		-- Run element Mode1Init via PLR/NPC object (guard: nil for beasts)
+		if elemObj and elemObj.Mode1Init then
+			pcall(function()
+				elemObj:Mode1Init(char)
+			end)
+		end
+
 		EquipDebounce[Identifier] = false
 
 		if IdleAnims[Identifier] then
@@ -206,7 +246,7 @@ function module.Mode2(char, npc)
 	end
 
 	EquipDebounce[Identifier] = true
-	char:SetAttribute("iframes", true)
+	char:SetAttribute("Iframes", true)
 	char:SetAttribute("IsTransforming", true)
 	char:SetAttribute("Mode2", true)
 	char:SetAttribute(StatFormulas.STAT_MULT_ATTRIBUTE, StatFormulas.CONFIG.TRANSFORM.StatMult)
@@ -216,9 +256,10 @@ function module.Mode2(char, npc)
 		warn("[Mode_Module] Element attribute is invalid for character: " .. char.Name)
 		return
 	end
+	local elemObj = getElementObj(char, npc)
 	local elementStats = ElementInfo.getStats(element)
-	local newWeapon = elementStats.Mode2
-	local dialogue = elementStats.Text
+	local newWeapon = (elemObj and elemObj.Data and elemObj.Data.Mode2Weapon) or elementStats.Mode2
+	local dialogue = (elemObj and elemObj.Data and elemObj.Data.Dialogue) or elementStats.Text
 
 	hum.Health += 100
 	rootPart.Anchored = true
@@ -285,8 +326,16 @@ function module.Mode2(char, npc)
 		rootPart.Anchored = false
 		char:SetAttribute("IsTransforming", false)
 		char:SetAttribute("Equipped", true)
-		char:SetAttribute("iframes", false)
+		char:SetAttribute("Iframes", false)
 		char:SetAttribute("Mode2", true)
+
+		-- Run element Mode2Init via PLR/NPC object (guard: nil for beasts)
+		if elemObj and elemObj.Mode2Init then
+			pcall(function()
+				elemObj:Mode2Init(char)
+			end)
+		end
+
 		EquipDebounce[Identifier] = false
 
 		if IdleAnims[Identifier] then
@@ -338,14 +387,34 @@ function module.Revert(char, npc)
 	if EquipDebounce[Identifier] then
 		return
 	end
+	local element = char:GetAttribute("Element")
+	if element == nil or element == "..." or element == "None" then
+		warn("[Mode_Module] Element attribute is invalid for character: " .. char.Name)
+		return
+	end
+	local elemObj = getElementObj(char, npc)
+
+	-- Mode2 -> Mode1 downgrade: different from Mode1 -> inactive
+	-- This is the "Mode2 -> Mode1" path you asked to separate.
+	if char:GetAttribute("Mode2") then
+		char:SetAttribute(StatFormulas.STAT_MULT_ATTRIBUTE, 1)
+		HelpfulModule.RemoveGlobalMult(char, "astral") -- undo Astral:Mode2Init (stack-aware)
+		if elemObj and elemObj.Data and elemObj.Data.Dodges ~= nil then
+			elemObj.Data.Dodges = 0 -- reset Time counter
+		end
+		char:SetAttribute("Mode2", false)
+		module.Mode1(char, npc) -- Mode1 will set Mode1=true + call Mode1Init via elemObj
+		return
+	end
 
 	if char:GetAttribute("Mode1") then
 		EquipDebounce[Identifier] = true
-		char:SetAttribute("iframes", true)
+		char:SetAttribute("Iframes", true)
 		char:SetAttribute("IsTransforming", false)
 
 		local newWeapon = "Fists"
 		TransformAnims[Identifier] = hum.Animator:LoadAnimation(WeaponsAnimations.Transformations.Revert)
+	
 		hum.WalkSpeed = 8
 		TransformAnims[Identifier]:Play()
 
@@ -398,18 +467,20 @@ function module.Revert(char, npc)
 				HelpfulModule.ResetMobility(char)
 				char:SetAttribute("IsTransforming", false)
 				char:SetAttribute("Equipped", true)
-				char:SetAttribute("iframes", false)
+				char:SetAttribute("Iframes", false)
 				char:SetAttribute("Mode1", false)
 				char:SetAttribute(StatFormulas.STAT_MULT_ATTRIBUTE, 1)
+				HelpfulModule.RemoveGlobalMult(char, "astral")
+				-- Guard: clear element state on full revert (Mode1 -> inactive)
+				if elemObj and elemObj.Data and elemObj.Data.Dodges ~= nil then
+					elemObj.Data.Dodges = 0
+				end
 				EquipDebounce[Identifier] = false
 
 				if IdleAnims[Identifier] then
 					IdleAnims[Identifier]:Play()
 				end
 			end)
-	elseif char:GetAttribute("Mode2") then
-		char:SetAttribute(StatFormulas.STAT_MULT_ATTRIBUTE, 1)
-		module.Mode1(char, npc)
 	else
 		warn(char, "Is performing a false revert")
 	end

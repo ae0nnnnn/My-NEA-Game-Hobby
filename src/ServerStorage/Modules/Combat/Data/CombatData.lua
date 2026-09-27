@@ -10,7 +10,7 @@ CombatData.DodgeAnims = {}
 CombatData.EquipDebounce = {}
 CombatData.DodgeDebounce = {}
 CombatData.ActiveStatusEffects = {}
-
+CombatData.ActiveGroups = {}
 
 
 CombatData.SuccessfulParry = {}

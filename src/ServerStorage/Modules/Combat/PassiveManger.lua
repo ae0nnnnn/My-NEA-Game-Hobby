@@ -39,9 +39,9 @@ local function Ragdoll(char, ragtime)
 		char:SetAttribute("IsRagdoll", true)
 		task.wait(ragtime)
 		char:SetAttribute("IsRagdoll", false)
-		char:SetAttribute("iframes", true)
+		char:SetAttribute("Iframes", true)
 		task.wait(0.6)
-		char:SetAttribute("iframes", false)
+		char:SetAttribute("Iframes", false)
 	end)
 end
 
@@ -107,13 +107,13 @@ function PassiveManger.M1LandedPassive(attackerObj, defenderObj, damage, STAT_PO
 		MultipliedDamage = MultipliedDamage * CritDmgMult
 	end
 
-	if DefenderElement == "Bone" then
+	if DefenderElement == "Time" then
 		print("If there was a passive for mode 1 it would be here")
 		if Defender_Second_ModeCheck then
 
 			-- Resolve defender's element object for dodge count
 			local DodgeCounter = 0
-			if defenderObj.Element and defenderObj.Element.Name == "Bone" then
+			if defenderObj.Element and defenderObj.Element.Name == "Time" then
 				DodgeCounter = defenderObj.Element.Data.Dodges or 0
 			end
 
@@ -133,7 +133,7 @@ function PassiveManger.M1LandedPassive(attackerObj, defenderObj, damage, STAT_PO
 		end
 	end
 
-	if AttackerElement == "Bone" then
+	if AttackerElement == "Time" then
 		print("If there was a passive for mode 1 it would be here")
 		if Attacker_Second_ModeCheck and not Attack_Dodged then
 			local TargetHum = defenderChar.Humanoid
@@ -222,6 +222,7 @@ function PassiveManger.BackStabPassive(attackerObj, defenderObj, damage) -- This
 end
 
 function PassiveManger.OnSkillLanded(attackerObj, defenderObj, damage, skill) -- this
+	
 end
 
 return PassiveManger

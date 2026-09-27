@@ -4,7 +4,7 @@ local Movement = require(RS.Modules.Movement.Objects.Movement)
 
 local REGEN_RATE = 1 / 100 -- Regenerate this fraction of MaxHealth per second.
 local REGEN_STEP = 1 -- Wait this long between each regeneration step.
-local RestingRegen_Rate = 5 / 100
+local RestingRegen_Rate = 8 / 100
 
 --------------------------------------------------------------------------------
 

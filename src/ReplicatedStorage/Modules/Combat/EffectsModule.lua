@@ -119,17 +119,33 @@ function module.EmitEffect(Targeteffect, cframe, destroytime)
 end
 
 
-function module.Highlight(char, duration, FillColor, OutlineColor)
+function module.Highlight(char, duration, FillColor, OutlineColor, buggedver)
+	buggedver = buggedver or false
+
 	local Highlight = Instance.new("Highlight")
 	Highlight.Parent = char
 	Highlight.DepthMode = Enum.HighlightDepthMode.Occluded
-	Highlight.FillTransparency = 0 -- was .2
+	Highlight.FillTransparency = not buggedver and 0 or -4
 	Highlight.FillColor = FillColor
-	Highlight.OutlineTransparency = 0.2
+	Highlight.OutlineTransparency = 1
 	Highlight.OutlineColor = OutlineColor
-	local TweenGoal = { FillTransparency = 1, OutlineTransparency = 1 }
-	TS:Create(Highlight, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), TweenGoal):Play()
+		if buggedver then
+		-- proportional snap: 45% to pop out of -1 -> 0, 55% nice fade 0 -> 1 + outline
+		local snapDuration = duration * 0.45
+		local fadeDuration = duration - snapDuration
+		local snapTween = TS:Create(Highlight, TweenInfo.new(snapDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { FillTransparency = 0 })
+		snapTween:Play()
+		snapTween.Completed:Connect(function()
+			if Highlight.Parent then
+				TS:Create(Highlight, TweenInfo.new(fadeDuration, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { FillTransparency = 1, OutlineTransparency = 1 }):Play()
+			end
+		end)
+	else
+		local TweenGoal = { FillTransparency = 1, OutlineTransparency = 1 }
+		TS:Create(Highlight, TweenInfo.new(duration, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), TweenGoal):Play()
+	end
 	Debris:AddItem(Highlight, duration)
+
 end
 
 function module.triggerEffects(parentObject, char, customOffset)
@@ -455,6 +471,7 @@ function module.AfterImage(char, anim, type)
 end
 
 function module.HighlightBlink(target, fillcolor, duration, blinkSpeed)
+	if not target then return end
 	print("Started highlight", target)
 	local hl = Instance.new("Highlight")
 	hl.FillColor = fillcolor
@@ -464,32 +481,39 @@ function module.HighlightBlink(target, fillcolor, duration, blinkSpeed)
 	hl.Parent = target
 	hl.DepthMode = Enum.HighlightDepthMode.Occluded
 
-	local elapsed = 0
-	local blinkTime = blinkSpeed or 0.5 -- Total time for one full blink cycle (0.25 out + 0.25 back)
-
-	while elapsed < duration do
-		-- Fade out
-		local blinkTween = TS:Create(
-			hl,
-			TweenInfo.new(0.25, Enum.EasingStyle.Linear),
-			{ FillTransparency = 0.5, OutlineTransparency = 0.5 }
-		)
-		blinkTween:Play()
-		blinkTween.Completed:Wait() -- Wait for fade out to finish
-
-		-- Fade back in
-		local resetTween = TS:Create(
-			hl,
-			TweenInfo.new(0.25, Enum.EasingStyle.Linear),
-			{ FillTransparency = 0, OutlineTransparency = 0 }
-		)
-		resetTween:Play()
-		resetTween.Completed:Wait() -- Wait for fade in to finish
-
-		elapsed += blinkTime
+	-- True sync: duration-scaled tween so visual ends exactly when window ends (6f 0.10s hypr)
+	-- For short durations (hypr 0.1) do single flash; for long durations (status 5s) loop with blinkSpeed
+	if duration <= 0.3 then
+		local half = duration / 2
+		local outTween = TS:Create(hl, TweenInfo.new(half, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { FillTransparency = 0.5, OutlineTransparency = 0.5 })
+		outTween:Play()
+		task.wait(half)
+		if hl.Parent then
+			local inTween = TS:Create(hl, TweenInfo.new(half, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { FillTransparency = 0, OutlineTransparency = 0 })
+			inTween:Play()
+		end
+		Debris:AddItem(hl, duration)
+		task.delay(duration, function()
+			print("Finished highlight")
+		end)
+		return
 	end
 
-	hl:Destroy()
+	local elapsed = 0
+	local blinkTime = blinkSpeed or 0.5
+	local halfCycle = blinkTime / 2
+	while elapsed < duration do
+		if not hl.Parent then break end
+		local blinkTween = TS:Create(hl, TweenInfo.new(halfCycle, Enum.EasingStyle.Linear), { FillTransparency = 0.5, OutlineTransparency = 0.5 })
+		blinkTween:Play()
+		blinkTween.Completed:Wait()
+		if not hl.Parent then break end
+		local resetTween = TS:Create(hl, TweenInfo.new(halfCycle, Enum.EasingStyle.Linear), { FillTransparency = 0, OutlineTransparency = 0 })
+		resetTween:Play()
+		resetTween.Completed:Wait()
+		elapsed += blinkTime
+	end
+	if hl.Parent then hl:Destroy() end
 	print("Finished highlight")
 end
 
@@ -516,6 +540,17 @@ function module.HyprVfx(char, echar, isMainSource)
 
 	Debris:AddItem(hl, 0.5)
 
+	local plrflag = PLayers:GetPlayerFromCharacter(char)
+
+	-- 4.7: parried person (isMainSource == false) gets highlight only — no cam/bars/UI so they can focus on hypr-parrying the revenge
+	if not isMainSource then
+		return
+	end
+
+	if plrflag ~= localplr then
+		return
+	end
+
 	Shiftoff(char)
 
 	local middlePosition: Vector3 = HRP.Position
@@ -531,9 +566,7 @@ function module.HyprVfx(char, echar, isMainSource)
 		middlePosition = HRP.Position:Lerp(echar.HumanoidRootPart.Position, 0.5)
 	end
 
-	local plrflag = PLayers:GetPlayerFromCharacter(char)
-
-	if plrflag == localplr then
+	do
 		localplr.CameraMode = Enum.CameraMode.Classic
 
 		local PlayerScripts = localplr:FindFirstChild("PlayerScripts")
@@ -546,13 +579,16 @@ function module.HyprVfx(char, echar, isMainSource)
 		end
 
 		local baseOrientation = HRP.CFrame - HRP.CFrame.Position
-		local camoffset = Vector3.new(6, -1.5, 15)
+		local camoffset = Vector3.new(8, -2.5, 13)
 		local camworldpos = HRP.Position + baseOrientation:VectorToWorldSpace(camoffset)
-		local TargetCframe = CFrame.lookAt(camworldpos, middlePosition)
+		-- 4.7: +2 lift with -2.5 down cam restores low-angle "looking up at middle" (aggressive)
+		local lookAtPos = middlePosition + Vector3.new(0, 2, 0)
+		local TargetCframe = CFrame.lookAt(camworldpos, lookAtPos)
 		module.TweenBars(char)
 
 		cam.CameraType = Enum.CameraType.Scriptable
-		cam.CFrame = TargetCframe
+		-- 4.7: 0.1s tween into position rather than snap
+		TS:Create(cam, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { CFrame = TargetCframe }):Play()
 		cam.FieldOfView = 55
 		module.HideUI(char)
 
@@ -567,8 +603,16 @@ function module.HyprVfx(char, echar, isMainSource)
 				local currentHRP = char.HumanoidRootPart
 				local currentEHRP = echar.HumanoidRootPart
 
-				local liveMiddle = currentHRP.Position:Lerp(currentEHRP.Position, 0.5)
-				local liveCamWorldPos = currentHRP.Position + baseOrientation:VectorToWorldSpace(camoffset)
+				local liveMiddle = currentHRP.Position:Lerp(currentEHRP.Position, 0.5) + Vector3.new(0, 2, 0)
+				-- 4.7: re-derive orientation live (lost during loop update) instead of frozen baseOrientation
+				local liveOrientation = currentHRP.CFrame - currentHRP.CFrame.Position
+				local baseCamWorldPos = currentHRP.Position + liveOrientation:VectorToWorldSpace(camoffset)
+				-- 4.7: glide back as defender slides from knockback — extra pull scales with separation
+				local diff = currentEHRP.Position - currentHRP.Position
+				local dist = diff.Magnitude
+				local dir: Vector3 = if dist > 0 then diff.Unit else currentHRP.CFrame.LookVector
+				local extraPull = math.clamp((dist - 3.5) * 0.15, 0, 6)
+				local liveCamWorldPos = baseCamWorldPos - dir * extraPull
 
 				cam.CFrame = CFrame.lookAt(liveCamWorldPos, liveMiddle)
 			else
@@ -603,11 +647,92 @@ function module.HyprVfx(char, echar, isMainSource)
 	end
 end
 
-module.DestroyEffects = function(char, effect)
+function module.DestroyEffects (char, effect)
 	for _, v in pairs(workspace.VFX:GetChildren()) do
 		if v.Name == effect.Name and v:GetAttribute("OwnerCharacter") == char.Name then
 			v:Destroy()
 		end
+	end
+end
+
+local ActiveTrails = setmetatable({}, { __mode = "k" })
+
+function module.Trail(char: Model, duration: number?)
+	local TrailFX = RS.Effects.Movement.Trail
+
+	local Parts = {
+		"Left Arm",
+		"Right Arm",
+		"Left Leg",
+		"Right Leg",
+	}
+
+	local function Create(part)
+		local Attachment0 = (TrailFX.Attachment1):Clone()
+		local Attachment1 = (TrailFX.Attachment2):Clone()
+		local TrailInstance = (TrailFX.Trail):Clone()
+
+		Attachment0.Parent = part
+		Attachment1.Parent = part
+
+		TrailInstance.Attachment0 = Attachment0
+		TrailInstance.Attachment1 = Attachment1
+
+		TrailInstance.Parent = part
+
+		return {
+			Attachment0 = Attachment0,
+			Attachment1 = Attachment1,
+			Trail = TrailInstance,
+		}
+	end
+
+	if not char then return end
+
+	local HumanoidRootPart = char:FindFirstChild("HumanoidRootPart") :: BasePart
+	if not HumanoidRootPart then return end
+
+	local Created = {}
+
+	for _, part in Parts do
+		local prt = char:FindFirstChild(part)
+		if prt then
+			table.insert(Created, Create(prt))
+		end
+	end
+
+	local stopped = false
+	local function Stop()
+		if stopped then return end
+		stopped = true
+		for _, VFX in Created do
+			VFX.Trail.Enabled = false
+		end
+		task.delay(0.4, function()
+			for _, VFX in Created do
+				VFX.Attachment0:Destroy()
+				VFX.Attachment1:Destroy()
+				VFX.Trail:Destroy()
+			end
+		end)
+	end
+
+	if duration then
+		task.delay(duration, Stop)
+	else
+		local existing = ActiveTrails[char]
+		if existing then
+			existing()
+		end
+		ActiveTrails[char] = Stop
+	end
+end
+
+function module.StopTrails(char: Model)
+	local stop = ActiveTrails[char]
+	if stop then
+		ActiveTrails[char] = nil
+		stop()
 	end
 end
 

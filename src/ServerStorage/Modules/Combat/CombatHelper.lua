@@ -23,7 +23,6 @@ local Combat_Data = require(ServerStorage.Modules.Combat.Data.CombatData)
 local IntentService = require(SSModules.Combat.IntentService)
 
 local VFX_Event: RemoteEvent = Events.VFX
-local MovementEvent: RemoteEvent = Events.Movement
 
 local Connections = {}
 
@@ -32,6 +31,7 @@ local MaxCombo = 4
 local FeintFlags = {}
 local BlinkCooldowns = {}
 local HitBoxes = {}
+local SwingHitLog = {} -- per-swing dedupe: {[Identifier] = {[Humanoid]=true}} — works around MuchachoHitbox multi-part same-frame bug without touching vendored
 
 function module.Attack(char, npc)
 	if not char or not char:FindFirstChild("Humanoid") then
@@ -73,15 +73,8 @@ function module.Attack(char, npc)
 	ServerCombatModule.ChangeCombo(char)
 	ServerCombatModule.stopAnims(hum)
 
-	-- Swing speed scales with AGL + AttackSpeedMultiplier + live flow bonus.
-	-- At base stats (AGL 10, mults 1, flow 1) this is 8, half of walk speed.
-	-- Rest mobility (AGL-scaled walk speed) is restored by ResetMobility in
-	-- cleanupSwing / CancelAttack.
-	local SpeedMods = require(RS.Modules.Movement.Ultils.Speed)
-	local flowBonus = HelpfullModule.GetCharFlowBonus(char)
-	local swingSpeed = 8 * SpeedMods.AGLMult(char:GetAttribute("AGL")) * SpeedMods.GetSpeedMult(char, "Attack") * flowBonus
-
-	hum.WalkSpeed = swingSpeed
+	-- Swing slow via GlobalSpeedMult (Flow-aware multiplicative stacking, restores via RemoveGlobalMult)
+	HelpfullModule.ApplyGlobalMult(char, "swing", 0.45)
 	hum.JumpHeight = 0
 
 	local WeaponStats = WeaponsStatsModule.getStats(currentWeapon)
@@ -91,8 +84,12 @@ function module.Attack(char, npc)
 	local playSwingAnimation = hum.Animator:LoadAnimation(SwingAnim)
 	local swingReset = WeaponStats.SwingReset
 	local swingFade = WeaponStats.SwingFade
-
-	
+	local SpeedMods = require(RS.Modules.Movement.Ultils.Speed)
+	local attackSpeed = SpeedMods.GetAttackSpeed(char)
+	if attackSpeed < 0.08 then attackSpeed = 0.08 end
+	if swingReset / attackSpeed < 0.08 then
+		warn(string.format("[CombatHelper] SwingReset too low: %s %.3f / speed %.3f", currentWeapon, swingReset, attackSpeed))
+	end
 
 	-- Disconnect any lingering connections from a previous swing
 	if Connections[Identifier] then
@@ -120,13 +117,15 @@ function module.Attack(char, npc)
 			hitEndConn = nil
 			Connections[Identifier].HitEnd = nil
 		end
+		HelpfullModule.RemoveGlobalMult(char, "swing")
 		HelpfullModule.ResetMobility(char)
 		if HitBoxes[Identifier] then
-		pcall(function()
-			HitBoxes[Identifier]:Stop()
-		end)
-		HitBoxes[Identifier] = nil 
-	end
+			pcall(function()
+				HitBoxes[Identifier]:Stop()
+			end)
+			HitBoxes[Identifier] = nil
+		end
+		SwingHitLog[Identifier] = nil
 		char:SetAttribute("Attacking", false)
 		char:SetAttribute("Swing", false)
 		FeintFlags[Identifier] = false
@@ -141,17 +140,37 @@ function module.Attack(char, npc)
 		HitBoxes[Identifier].VelocityPrediction = true
 		HitBoxes[Identifier].Visualizer = true
 		HitBoxes[Identifier].Offset = WeaponStats.HitboxOffset
-		HitBoxes[Identifier].DetectionMode = "HitOnce"
+		HitBoxes[Identifier].DetectionMode = "Default"
 
 		local params = OverlapParams.new()
-        params.FilterDescendantsInstances = {char}
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        HitBoxes[Identifier].OverlapParams = params
+		params.FilterDescendantsInstances = { char }
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		-- Pack-only friendly fire: exclude same-group members (data lives in Combat_Data, no npc require needed)
+		if npc then
+			local groupName = npc:GetGroupName()
+			if groupName then
+				local packData = Combat_Data.ActiveGroups[groupName]
+				if packData then
+					for member in pairs(packData.Members) do
+						if member.Character and member.Character ~= char then
+							table.insert(params.FilterDescendantsInstances, member.Character)
+						end
+					end
+				end
+			end
+		end
+		HitBoxes[Identifier].OverlapParams = params
 
-        HitBoxes[Identifier]:Start()
+		HitBoxes[Identifier]:Start()
 
-
+		SwingHitLog[Identifier] = {}
 		HitBoxes[Identifier].Touched:Connect(function(hit, humanoid)
+			if SwingHitLog[Identifier] and SwingHitLog[Identifier][humanoid] then
+				return
+			end
+			if SwingHitLog[Identifier] then
+				SwingHitLog[Identifier][humanoid] = true
+			end
 			local Result = HitServiceModule.Normal_Hitbox(char, currentWeapon, humanoid, npc, hit, HitAnim)
 			print(Result)
 		end)
@@ -169,22 +188,22 @@ function module.Attack(char, npc)
 			end)
 			HitBoxes[Identifier] = nil -- Clear reference so it can't be stopped again
 		end
+		SwingHitLog[Identifier] = nil
+		HelpfullModule.RemoveGlobalMult(char, "swing")
 		char:SetAttribute("Swing", false)
-	
 
 		if char:GetAttribute("Combo") == MaxCombo then
-			task.wait(swingReset + 0.5)
+			task.wait((swingReset / attackSpeed) + 0.7)
 		else
-			task.wait(swingReset)
+			task.wait(swingReset / attackSpeed)
 		end
 
 		char:SetAttribute("Attacking", false)
 		if hitEndConn then
 			hitEndConn:Disconnect()
-		hitEndConn = nil
+			hitEndConn = nil
 		end
 
-		
 		Connections[Identifier].HitEnd = nil
 		FeintFlags[Identifier] = false
 	end)
@@ -196,6 +215,9 @@ function module.Attack(char, npc)
 		cleanupSwing()
 	end)
 
+	if attackSpeed ~= 1 then
+		playSwingAnimation:AdjustSpeed(attackSpeed)
+	end
 	playSwingAnimation:Play(swingFade)
 	VFX_Event:FireAllClients("SwingEffect", SwingEffect, char)
 	SoundsModule.PlaySound(WeaponSounds[currentWeapon].Combat.Swing, torso)
@@ -223,19 +245,29 @@ function module.CancelAttack(char, npc)
 		pcall(function()
 			HitBoxes[Identifier]:Stop()
 		end)
-		HitBoxes[Identifier] = nil 
+		HitBoxes[Identifier] = nil
 	end
+	SwingHitLog[Identifier] = nil
+	HelpfullModule.RemoveGlobalMult(char, "swing")
 	HelpfullModule.ResetMobility(char)
+	HelpfullModule.RefundStamina(char, "Swing")
 	VFX_Event:FireAllClients("DestroyVFX", char, SwingEffect)
-	IntentService.SetIntent(char, npc, "None")
-	
-	local sound = char:FindFirstChild("Swing",true)
+	VFX_Event:FireAllClients("Highlight", char, 0.15, Color3.fromRGB(167, 166, 166), Color3.fromRGB(167, 166, 166))
+	IntentService.SetIntent(char, npc, "Feint")
+
+	task.delay(0.35, function()
+		if char and char.Parent and IntentService.GetIntent(char, npc) == "Feint" then
+			IntentService.SetIntent(char, npc, "None")
+		end
+	end)
+
+	local sound = char:FindFirstChild("Swing", true)
 	if sound then
 		sound:Destroy()
 	end
 end
 
-function module.RevengeCounter(char: Model, npc)  -- TODO: Modify this to use the element obj rather than a general one
+function module.RevengeCounter(char: Model, npc) -- TODO: Modify this to use the element obj rather than a general one
 	local tag = char:FindFirstChild("RevengeTarget")
 	if not tag then
 		return
@@ -243,7 +275,7 @@ function module.RevengeCounter(char: Model, npc)  -- TODO: Modify this to use th
 
 	char:SetAttribute("CanRevenge", false)
 	char:SetAttribute("Iframes", true)
-	char:SetAttribute("Attacking",true)
+	char:SetAttribute("Attacking", true)
 	IntentService.SetIntent(char, npc, "RevengeCounter")
 
 	local echar = tag.Value
@@ -266,7 +298,7 @@ function module.RevengeCounter(char: Model, npc)  -- TODO: Modify this to use th
 		return
 	end
 
-	for i, item in pairs(char:GetDescendants()) do
+	for _, item in pairs(char:GetDescendants()) do
 		if item:IsA("BasePart") and item.Name ~= "HumanoidRootPart" then
 			item.CanCollide = false
 		end
@@ -284,29 +316,56 @@ function module.RevengeCounter(char: Model, npc)  -- TODO: Modify this to use th
 	local RevengeAnim = hum.Animator:LoadAnimation(WeaponsAnimations[currentWeapon].Combat.RevengeCounter)
 	RevengeAnim:Play()
 
-	VFX_Event:FireAllClients("HyprIndicator", HRP.CFrame)
+	VFX_Event:FireAllClients("HyprIndicator",char, HRP.CFrame)
 
-	
-	local function TriggerRevengeHitbox()
+	local REVENGE_CLOSE_DIST = 3.5
+
+	local function restoreCollide()
+		for _, item in pairs(char:GetDescendants()) do
+			if item:IsA("BasePart") and item.Name ~= "HumanoidRootPart" then
+				item.CanCollide = true
+			end
+		end
+	end
+
+	local function computeRevengeTarget(fromHRP: BasePart, toEHRP: BasePart, dist: number)
+		local flatEnemy = Vector3.new(toEHRP.Position.X, fromHRP.Position.Y, toEHRP.Position.Z)
+		local vec = flatEnemy - fromHRP.Position
+		local dir = vec.Magnitude > 0 and vec.Unit or fromHRP.CFrame.LookVector
+		local target = flatEnemy - (dir * dist)
+		-- wall clamp same as lerp path so final snap doesn't clip through geometry
+		local rayDir = target - fromHRP.Position
+		local rayDist = rayDir.Magnitude
+		if rayDist > 0 then
+			local params = RaycastParams.new()
+			params.FilterDescendantsInstances = { char, echar }
+			params.FilterType = Enum.RaycastFilterType.Exclude
+			local hit = workspace:Raycast(fromHRP.Position, rayDir.Unit * rayDist, params)
+			if hit then
+				target = hit.Position - (rayDir.Unit * 1.5)
+			end
+		end
+		return target, flatEnemy
+	end
+
+	local function createRevengeHitboxAtMarker()
 		if not HRP.Parent or not EHRP.Parent then
-			return
+			return nil, nil
 		end
 
 		HRP.AssemblyLinearVelocity = Vector3.zero
 		HRP.AssemblyAngularVelocity = Vector3.zero
 
-		local distanceVector = EHRP.Position - HRP.Position
-		local flatEnemyPos = Vector3.new(EHRP.Position.X, HRP.Position.Y, EHRP.Position.Z)
-		local targetPosition = flatEnemyPos - (distanceVector.Unit * 3)
+		local targetPosition, flatEnemyPos = computeRevengeTarget(HRP, EHRP, REVENGE_CLOSE_DIST)
 		HRP.CFrame = CFrame.lookAt(targetPosition, flatEnemyPos)
-
-		for i, item in pairs(char:GetDescendants()) do
-			if item:IsA("BasePart") and item.Name ~= "HumanoidRootPart" then
-				item.CanCollide = true
-			end
+		-- ensure victim stays hypr-parryable: victim Iframes false during revenge hitbox
+		if echar and echar.Parent then
+			echar:SetAttribute("Iframes", false)
 		end
 
-		print("We got there safely")
+		restoreCollide()
+
+		print("We got there safely - CastHitBox")
 
 		local size = Vector3.new(5, 5, 5)
 		local comboValue = char:GetAttribute("Combo") :: number
@@ -315,97 +374,105 @@ function module.RevengeCounter(char: Model, npc)  -- TODO: Modify this to use th
 		local RevengeHitbox = MuchachoHitbox.CreateHitbox()
 		RevengeHitbox.Size = size
 		RevengeHitbox.CFrame = HRP.CFrame
-		RevengeHitbox.Offset = CFrame.new(0,-3,0)
+		RevengeHitbox.Offset = CFrame.new(0, -3, 0)
 		local params = OverlapParams.new()
-        params.FilterDescendantsInstances = {char}
-        params.FilterType = Enum.RaycastFilterType.Exclude
+		params.FilterDescendantsInstances = { char }
+		params.FilterType = Enum.RaycastFilterType.Exclude
 		RevengeHitbox.OverlapParams = params
 
 		RevengeHitbox:Start()
 
 		RevengeHitbox.Touched:Connect(function(hit, humanoid)
-			return HitServiceModule.Normal_Hitbox(char, currentWeapon, humanoid, npc, hit, HitAnim)
+			return HitServiceModule.Revenge_Hitbox(char, currentWeapon, humanoid, npc, hit, HitAnim)
 		end)
 
-		task.wait(0.2) -- would replace with a anim event 
-		if RevengeHitbox then
-		pcall(function()
-			RevengeHitbox:Stop()
+		-- revenger stays iframe'd through dash + hitbox so third-party can't steal the trade; victim stays hittable for hypr-parry (cleared above)
+		task.delay(0.35, function()
+			if RevengeHitbox then
+				pcall(function() RevengeHitbox:Stop() end)
+				RevengeHitbox = nil
+			end
+			char:SetAttribute("Attacking", false)
+			char:SetAttribute("Iframes", false)
+			HelpfullModule.ResetMobility(char)
+			if tag then
+				tag:Destroy()
+			end
 		end)
-		RevengeHitbox= nil 
+		return RevengeHitbox, HitAnim
 	end
 
-
+	local function TriggerRevengeHitbox()
+		local markerConn: RBXScriptConnection? = nil
+		local created = false
+		local function doCreate()
+			if created then return end
+			created = true
+			if markerConn then markerConn:Disconnect() end
+			createRevengeHitboxAtMarker()
+		end
+		markerConn = RevengeAnim:GetMarkerReachedSignal("CastHitBox"):Connect(doCreate)
+		task.delay(0.12, function()
+			if not created then doCreate() end
+		end)
+		RevengeAnim.Stopped:Connect(function()
+			task.wait(0.05)
+			if not created then doCreate() end
+		end)
 	end
 
-	if not plr then
-		-- NPC PATH: Run server physics movers
-		local att = HRP:FindFirstChild("RevengeAtt") or Instance.new("Attachment", HRP)
-		att.Name = "RevengeAtt"
+	do
+		local initDist = (EHRP.Position - HRP.Position).Magnitude
+		if initDist > 36 then
+			restoreCollide()
+			HelpfullModule.ResetMobility(char)
+			char:SetAttribute("Attacking", false)
+			char:SetAttribute("Iframes", false)
+			if tag then tag:Destroy() end
+			return
+		end
 
-		local lv = Instance.new("LinearVelocity", HRP)
-		lv.Name = "RevengeVelocity"
-		lv.Attachment0 = att
-		lv.MaxForce = math.huge
+		local REVENGE_DUR = math.clamp(initDist / 30, 0.08, 0.25)
 
-		local conn
+		pcall(function() HRP:SetNetworkOwner(nil) end)
+		task.delay(0.35, function()
+			if HRP.Parent and plr and plr.Parent then
+				pcall(function() HRP:SetNetworkOwner(plr) end)
+			end
+		end)
+
+		local startCF = HRP.CFrame
+		local targetPos, initFlat = computeRevengeTarget(HRP, EHRP, REVENGE_CLOSE_DIST)
+		local targetCF = CFrame.lookAt(targetPos, Vector3.new(EHRP.Position.X, targetPos.Y, EHRP.Position.Z))
 		local startTime = os.clock()
-
+		local conn: RBXScriptConnection? = nil
 		conn = RunService.Heartbeat:Connect(function()
 			if not echar.Parent or not EHRP.Parent or not char.Parent or not HRP.Parent then
-				conn:Disconnect()
-				lv:Destroy()
+				if conn then conn:Disconnect() end
+				restoreCollide()
 				return
 			end
-
-			local distanceVector = EHRP.Position - HRP.Position
-			local dist = distanceVector.Magnitude
-
-			if dist <= 3.5 or (os.clock() - startTime) >= 0.2 then
-				conn:Disconnect()
-				lv:Destroy()
+			local elapsed = os.clock() - startTime
+			local alpha = math.clamp(elapsed / REVENGE_DUR, 0, 1)
+			local eased = 1 - (1 - alpha) ^ 2
+			if alpha >= 1 then
+				if conn then conn:Disconnect() end
+				HRP.CFrame = targetCF
+				if (HRP.Position - EHRP.Position).Magnitude > 40 then
+					restoreCollide()
+					char:SetAttribute("Attacking", false)
+					char:SetAttribute("Iframes", false)
+					if tag then tag:Destroy() end
+					return
+				end
 				TriggerRevengeHitbox()
 				return
 			end
-
-			lv.VectorVelocity = distanceVector.Unit * 180
+			HRP.CFrame = startCF:Lerp(targetCF, eased)
 		end)
-	else
-		-- PLAYER PATH: Tell client to execute movement physics, server waits to pop hitbox
-		MovementEvent:FireClient(plr, "RevengeCounter", char, echar)
-
-		task.delay(0.2, function()
-			TriggerRevengeHitbox()
-			char:SetAttribute("Iframes", false)
-		end)
-
-		task.delay(0.09, function()
-			char:SetAttribute("Attacking",false)
-		end)
-
-		
 	end
 end
-function module.CleanupForPlayer(identifier)
-	if Connections[identifier] then
-		for _, conn in pairs(Connections[identifier]) do
-			if conn then
-				pcall(function()
-					conn:Disconnect()
-				end)
-			end
-		end
-		Connections[identifier] = nil
-	end
-	if HitBoxes[identifier] then
-		pcall(function()
-			HitBoxes[identifier]:Stop()
-		end)
-		HitBoxes[identifier] = nil
-	end
-	FeintFlags[identifier] = nil
-	BlinkCooldowns[identifier] = nil
-end
+
 
 function module.Blink(char, npc, target)
 	local plr = Players:GetPlayerFromCharacter(char)
@@ -432,10 +499,10 @@ function module.Blink(char, npc, target)
 	local BlinkHitbox = MuchachoHitbox.CreateHitbox()
 	BlinkHitbox.CFrame = HRP
 	BlinkHitbox.Size = Size
-	BlinkHitbox.Offset =  CFrame.new(0, -2, 0)
+	BlinkHitbox.Offset = CFrame.new(0, -2, 0)
 	local params = OverlapParams.new()
-    params.FilterDescendantsInstances = {char}
-    params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { char }
+	params.FilterType = Enum.RaycastFilterType.Exclude
 	BlinkHitbox.DetectionMode = "HitOnce"
 	BlinkHitbox:Start()
 
@@ -445,12 +512,43 @@ function module.Blink(char, npc, target)
 
 	task.delay(0.5, function() -- TODO :  replace with anim event when added so its actually possbile to parry it
 		if BlinkHitbox then
-		pcall(function()
-			BlinkHitbox:Stop()
-		end)
-		BlinkHitbox= nil 
+			pcall(function()
+				BlinkHitbox:Stop()
+			end)
+			BlinkHitbox = nil
 		end
 	end)
 end
 
+function module.UpperCut(char, npc)
+	if HelpfullModule.CheckForAttributes(char, true, true, true, true, true, true, true, nil, true) then
+		return
+	end
+
+	IntentService.SetIntent(char, npc, "UpperCut")
+end
+
+
+
+function module.CleanupForPlayer(identifier)
+	if Connections[identifier] then
+		for _, conn in pairs(Connections[identifier]) do
+			if conn then
+				pcall(function()
+					conn:Disconnect()
+				end)
+			end
+		end
+		Connections[identifier] = nil
+	end
+	if HitBoxes[identifier] then
+		pcall(function()
+			HitBoxes[identifier]:Stop()
+		end)
+		HitBoxes[identifier] = nil
+	end
+	FeintFlags[identifier] = nil
+	BlinkCooldowns[identifier] = nil
+	SwingHitLog[identifier] = nil
+end
 return module

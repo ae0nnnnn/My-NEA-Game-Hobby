@@ -1,8 +1,6 @@
 -- [Global Varilbles]
 local RS = game:GetService("ReplicatedStorage")
 local SS = game:GetService("ServerStorage")
-local ServerScripts = game:GetService("ServerScriptService")
-local Players = game:GetService("Players")
 local ServerStorage = game:GetService("ServerStorage")
 
 
@@ -12,7 +10,6 @@ local SSModules = SS.Modules
 local WeaponsEvent = Events.WeaponsEvent
 local BlockingEvent = Events.Blocking
 local TransformEvent = Events.Tranform
-local DodgeEvent = Events.Dodge
 local updateEvent = Events.UpdateMovement
 
 local HelpfullModule = require(SSModules.Other.Helpful)
@@ -24,7 +21,6 @@ local ParryModule = require(ServerStorage.Modules.Parrying)
 local EquipModule = require(ServerStorage.Modules.Combat.EquipModule)
 
 -- Local Tables
-local Welds = Combat_Data.Welds
 local EquipDebounce = Combat_Data.EquipDebounce
 
 
@@ -54,7 +50,7 @@ BlockingEvent.OnServerEvent:Connect(function(plr, action)
 
 	char:SetAttribute("HoldingBlock", action ~= "UnBlocking")
 
-	if HelpfullModule.CheckForAttributes(char, true, true, true, nil, true, false, true, nil) then
+	if HelpfullModule.CheckForAttributes(char, true, false, true, nil, true, false, true, nil) then
 		return
 	end
 
@@ -66,7 +62,6 @@ BlockingEvent.OnServerEvent:Connect(function(plr, action)
 		action == "Parry"
 		and not char:GetAttribute("IsBlocking")
 		and not char:GetAttribute("Parrying")
-		and not char:GetAttribute("ParryCD")
 	then
 		ParryModule.ParryAttempt(char)
 	end

@@ -3,8 +3,20 @@ local SkillInfo = {}
 SkillInfo.Elements = {
 	Astral = {
 		R = {
-			Mode1 = { Name = "", Type = "Heavy", ParryInterupt = true },
-			Mode2 = { Name = "", Type = "Heavy", ParryInterupt = true },
+			Mode1 = { 
+				Name = "", 
+				Type = "Heavy", 
+				DamageType = "Phys",
+				ParryInterupt = true,
+				CanParry = true,
+				CanHyprParry = false,
+		 },
+
+			Mode2 = {
+				 Name = "",
+				 Type = "Heavy",
+				 ParryInterupt = true 
+				},
 		},
 		Z = {
 			Mode1 = { Name = "", Type = "Light", ParryInterupt = true },
@@ -23,9 +35,9 @@ SkillInfo.Elements = {
 			Mode2 = { Name = "", Type = "Heavy", ParryInterupt = true },
 		},
 	},
-	Bone = {
+	Time = {
 		R = {
-			Mode1 = { Name = "WeaponSwap", Type = "Heavy", ParryInterupt = true },
+			Mode1 = { Name = "WeaponSwap", Type = "None", ParryInterupt = false },
 			Mode2 = { Name = "", Type = "Heavy", ParryInterupt = true },
 		},
 		Z = {
@@ -51,8 +63,11 @@ SkillInfo.Stats = {
 	WPN = {
 		SlashStorm = {
 			Name = "SlashStorm",
-			Type = "Heavy",
+			Type = "Light",
+			DamageType = "Phys",
 			ParryInterupt = false,
+			CanParry = true,
+			CanHyprParry = false,
 			Costs = {
 				Stamina = 15,
 			},
@@ -87,10 +102,10 @@ end
 -- NPC skills keyed by mob name (populate when mobs are added)
 -- SkillInfo.NPCs = {
 -- 	["MobName"] = {
--- 		SkillName = "Heavy"
--- 		Z = { Name = "", Type = "Light" },
--- 		X = { Name = "", Type = "Light" },
--- 		C = { Name = "", Type = "Heavy" },
+-- 		SkillName =  {
+--            Type = "Light" , CanParry = false, CanHyprParry = true
+--        }
+--
 -- 	},
 -- }
 
