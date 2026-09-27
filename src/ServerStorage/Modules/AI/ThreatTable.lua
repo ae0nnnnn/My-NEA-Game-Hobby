@@ -89,7 +89,7 @@ function ThreatTable.ClearDead(Object)
 end
 
 function ThreatTable.Reset(Object)
-	if not Object.Threatzs then
+	if not Object.Threats then
 		return
 	end
 	Object.Threats.entries = {}

@@ -7,38 +7,42 @@
 ]=]
 --[=[
 	@interface NPCData
-	.FirstName string -- The NPC's first name
-	.LastName string -- The NPC's last name
-	.Difficulty string -- e.g. "Boss", used to pick the model template and Brain script
-	.MobType string -- e.g. "Humanoid", "Human"; affects model creation and element assignment
-	.Character Model -- The NPC's physical character model in the workspace
+	.FirstName string -- The NPC's first name (populated after name generation, see npc.new)
+	.LastName string -- The NPC's last name (populated after name generation)
+	.Difficulty string -- e.g. "Boss", "SmallFry"; used to pick the model template and Brain script from Brain_Folder
+	.MobType string -- e.g. "Humanoid", "Human"; affects model creation, element assignment, and Brain selection
+	.Character Model -- The NPC's physical character model in workspace.NPC
 	.Element ElementObject? -- The NPC's combat element object, or nil for non-humanoid mobs without one
 	.Brain Script -- The behavior-tree script driving this NPC, parented under Character
-	.talents {} -- Reserved for future talent data
-	.skills {} -- Reserved for future skill data
+	.talents {} -- Reserved for future talent data (currently empty table)
+	.skills {} -- Reserved for future skill data (currently empty table)
 	.drops {} -- Loot table entries chosen on death (currently unused, see PickDrops)
-	.MovementObj ServerTypes.MovementObj -- Handles this NPC's movement mechanics (dodge, climb, wall run)
-	.Intent -- This is the buffer that holds what combat action is the actor waiting to do
-	.AIObject -- reference to the brain script's Object table (holds .Threats, .Target, etc.)
+	.MovementObj ServerTypes.MovementObj -- Handles this NPC's movement mechanics (dodge, climb, wall run) via RS.Modules.Movement
+	.Intent string -- Buffer holding the queued combat action ("None", "Attack", etc.); read by Brain scripts
+	.AIObject {[string]: any}? -- Reference to the Brain script's Object table (holds .Threats, .Target, etc.); set after Brain initializes
+	._GroupName string? -- Internal Pack Tactics group id, set by AssignGroup; nil if not in a group
 	@within NPC
 ]=]
 
 --[=[
 	@interface NPCMethods
-	.Destroy (self: NPC) -> () -- Cleans up connections, references, and Combat_Data entries
+	.Destroy (self: NPC) -> () -- Cleans up CharToNPC, Pack Tactics group membership, Character model, and Combat_Data entries; then freezes the object
 	.EquipWeapon (self: NPC) -> () -- Equips the NPC's CurrentWeapon attribute via EquipModule
 	.UnequipWeapon (self: NPC) -> () -- Unequips the NPC's current weapon via EquipModule
-	.Start (self: NPC) -> () -- Enables the NPC's Brain script, making it active in the game
-	.Attack (self: NPC) -> () -- Performs an attack via CombatHelper
-	.Idle (self: NPC) -> () -- Plays the idle animation for the NPC's current weapon
-	.Block (self: NPC) -> () -- Activates blocking via BlockModule
-	.Unblock (self: NPC) -> () -- Deactivates blocking via BlockModule
-	.Dodge (self: NPC, Direction: Vector3?) -> () -- Performs a dodge via DodgeModule
-	.Parry (self: NPC) -> () -- Attempts a parry via ParryModule
-	.Phase2 (self: NPC) -> () -- Triggers a phase 2 transformation via ModeModule
-	.CastAblity (self: NPC) -> () -- Stub, not yet implemented
-	.Climb (self: NPC) -> () -- Stub, not yet implemented
-	.WallRun (self: NPC) -> () -- Stub, not yet implemented
+	.Start (self: NPC) -> () -- Enables the NPC's Brain script (sets Disabled = false), making it active
+	.Attack (self: NPC) -> () -- Performs an attack via CombatHelper; no-ops if IsTransforming
+	.Idle (self: NPC) -> () -- Plays the idle animation for the NPC's current weapon; no-ops if already playing
+	.Block (self: NPC) -> () -- Activates blocking via BlockModule; guarded by IsTransforming and CheckForAttributes
+	.Unblock (self: NPC) -> () -- Deactivates blocking via BlockModule; same guards as Block
+	.Dodge (self: NPC) -> () -- Performs a dodge via DodgeModule using this NPC's MovementObj; no-ops if IsTransforming
+	.Parry (self: NPC) -> () -- Attempts a parry via ParryModule; guarded by IsTransforming and CheckForAttributes
+	.Phase2 (self: NPC) -> () -- Triggers a phase 2 transformation via ModeModule; no-ops if already transforming
+	.CancelAttack (self: NPC) -> () -- Cancels the current swing via CombatHelper if Swing attribute is true
+	.CastAblity (self: NPC) -> () -- Stub, not yet implemented (reserved for ability casting)
+	.Climb (self: NPC) -> () -- Stub, not yet implemented (reserved for wall-jump)
+	.WallRun (self: NPC) -> () -- Stub, not yet implemented (reserved for wall-run)
+	.AssignGroup (self: NPC, groupName: string, role: string?) -> () -- Adds this NPC to a Pack Tactics group (max 5 members); first member becomes Leader/Aggressor
+	.GetGroupName (self: NPC) -> string? -- Returns the Pack Tactics group name for this NPC, if any
 	@within NPC
 ]=]
 
@@ -70,8 +74,49 @@ local WeaponAnimations = RS.Animations.Weapons
 npc.__index = npc
 local CharToNPC = {}
 
+--[=[
+	@interface GroupData
+	.Leader NPC? -- Current group leader; first member added, re-promoted to most recent hitter on leader death
+	.Aggressor NPC? -- Current aggressor (most recent hitter); re-elected on NotifyHit with 2s anti-flicker tenure
+	.Members {[NPC]: boolean} -- Set of live members (max 5 per group)
+	.TargetPlayer Model? -- Last player character that hit a member; set by NotifyHit
+	.SharedWaypoints {any}? -- Reserved shared waypoints for coordinated movement (currently unused)
+	.LastHitTimes {[NPC]: number} -- os.clock() timestamp of last hit per member; drives Leader/Aggressor election
+	.lastAggressorChange number -- os.clock() when Aggressor last changed; enforces 2s minimum tenure
+	@within NPC
+]=]
+
+--[=[
+	Pack Tactics shared group state (Addendum B) — additive, plain data read by Brain scripts.
+	Backed by Combat_Data.ActiveGroups so brains and server share the same table.
+	@within NPC
+]=]
+export type GroupData = {
+	Leader: NPC?,
+	Aggressor: NPC?,
+	Members: {[NPC]: boolean},
+	TargetPlayer: Model?,
+	SharedWaypoints: {any}?,
+	LastHitTimes: {[NPC]: number},
+	lastAggressorChange: number,
+}
+local ActiveGroups: {[string]: GroupData} = Combat_Data.ActiveGroups
+
 export type NPC = ServerTypes.NPC
 
+--[=[
+	Creates a character Model for an NPC from templates in RS.Models.NPC.
+
+	Uses `FindFirstChild` for Boss/Humanoid/Human mobs (tolerates missing templates),
+	otherwise indexes directly (errors if missing).
+
+	@param npcName string -- Key for NPCModels lookup (same as NpcName passed to npc.new)
+	@param Difficulty string -- e.g. "Boss"; controls lookup strategy
+	@param MobType string -- e.g. "Humanoid"; controls lookup strategy
+	@return Model -- Cloned model (not yet parented)
+	@private
+	@within NPC
+]=]
 local function CreateModel(npcName, Difficulty, MobType)
 	local TargetTemplate: Model = nil
 	-- Then I would randomise hair, skintone, face etc once i make a customastion module
@@ -84,6 +129,15 @@ local function CreateModel(npcName, Difficulty, MobType)
 	return TargetTemplate:Clone()
 end
 
+--[=[
+	Stub for loot selection. Pulls the NPC's drop table via NPC_Dictionary but
+	currently returns an empty array; random selection logic is pending.
+
+	@param npcName string -- Key for NPC_Dictionary.getStats
+	@return {any} -- Chosen drops (currently always empty)
+	@private
+	@within NPC
+]=]
 local function PickDrops(npcName)
 	local npcInfo = NPC_Dictionary.getStats(npcName)
 	local LootTable = npcInfo.Drops
@@ -123,18 +177,18 @@ function npc.new(NpcName: string, char: Model?): NPC
 			Element = nil :: any,
 			MovementObj = nil :: any,
 			Brain = nil :: any,
-			talents = {},
-			skills = {},
+			Talents = {},
+			Skills = {},
 			drops = {},
 			Intent = "None",
 			AIObject = nil :: any,
 		}, npc) :: any
 	) :: NPC
 	
-	local NPCinfo = NPC_Dictionary.getStats(NpcName)
+	local NPCinfo:NPC_Dictionary.Npc_Info = NPC_Dictionary.getStats(NpcName)
 	print(NPCinfo)
 	print(NPC_Dictionary)
-	self.MobType = NPCinfo.Mobtype
+	self.MobType = NPCinfo.MobType
 	self.Difficulty = NPCinfo.Difficulty
 	self.Character = char or CreateModel(NpcName, self.Difficulty, self.MobType)
 
@@ -160,12 +214,13 @@ function npc.new(NpcName: string, char: Model?): NPC
 		local Brain: Script = Brain_Folder[self.Difficulty]:Clone()
 		Brain.Parent = self.Character
 		self.Brain = Brain
+		
 		for i, v in pairs(NPCinfo.STAT_POINTS) do
 			self[i] = v
 			self.Character:SetAttribute(i, v)
 		end
 
-		self.Character:SetAttribute("CurrentWeapon", "ShootingStar") -- defulat is meant to fists for tesing purposes i am using a hard set weapon
+		self.Character:SetAttribute("CurrentWeapon", "Fractured_Kunai") -- defulat is meant to be whater the mob data is for tesing purposes i am using a hard set weapon
 		self.Character:SetAttribute("Blocking", 0)
 	    self.Character:SetAttribute("Karma", 0)
 		local Torso = self.Character:FindFirstChild("Torso")
@@ -173,7 +228,8 @@ function npc.new(NpcName: string, char: Model?): NPC
 		self:EquipWeapon()
 
 		if self.Difficulty == "Boss" or self.MobType == "Humanoid" then
-			local ElementModule = require(SSModules.Element[NPCinfo.Element])
+			local elemName = NPCinfo.Element == "Bone" and "Time" or NPCinfo.Element
+			local ElementModule = require(SSModules.Element[elemName])
 			self.Element = ElementModule.new()
 			self.Character:SetAttribute("Element", self.Element.Name)
 		else
@@ -183,12 +239,24 @@ function npc.new(NpcName: string, char: Model?): NPC
 	else
 		self.Brain = self.Character.Brain
 		local attr = self.Character:GetAttribute("Element")
+		if attr == "Bone" then attr = "Time" end
 		if attr and attr ~= "None" and attr ~= "" then
 			self.Element = require(SSModules.Element[attr]).new()
+			if attr == "Time" then self.Character:SetAttribute("Element", "Time") end
 		else
 			self.Element = nil
 		end
 
+	end
+
+	-- Replace default Roblox Animate with Movement-driven NPC Animate (cloned per instance)
+	local defaultAnimateScript = self.Character:FindFirstChild("Animate")
+	if defaultAnimateScript then
+		defaultAnimateScript:Destroy()
+	end
+	if Brain_Folder:FindFirstChild("Animate") then
+		local npcAnimateClone = Brain_Folder.Animate:Clone()
+		npcAnimateClone.Parent = self.Character
 	end
 
 	if self.Element and self.Element.Innate then
@@ -204,6 +272,12 @@ function npc.new(NpcName: string, char: Model?): NPC
 		self.MovementObj.Flow.CurrentSpeed = walkSpeed
 		self.MovementObj.Flow.TargetSpeed = walkSpeed
 	end
+
+	-- Pre-warm combat/movement anims for this NPC so first Swing/Block is seamless
+	task.defer(function()
+		local hum = self.Character:FindFirstChildOfClass("Humanoid")
+		if hum and _G.WarmUpCombatAnimations then pcall(_G.WarmUpCombatAnimations, hum) end
+	end)
 
 	CharToNPC[self.Character] = self
 
@@ -233,14 +307,189 @@ function npc.GetNpcFromCharacter(char): NPC?
 end
 
 --[=[
-	Destroys the NPC: removes it from CharToNPC, destroys its
-	Character model, then clears and freezes the NPC object itself so it can no longer be
-	mutated or reused. Also scrubs any remaining references to this NPC out of every table
-	in Combat_Data.
+	Returns the live Pack Tactics group table (alias of Combat_Data.ActiveGroups).
+	Brains read this to coordinate targeting and waypoints.
+
+	@return {[string]: GroupData} -- Map from groupName to GroupData
+	@within NPC
+]=]
+function npc.GetActiveGroups(): {[string]: GroupData}
+	return Combat_Data.ActiveGroups
+end
+
+--[=[
+	Records a hit on a group member and re-elects Aggressor.
+
+	- Updates `LastHitTimes[hitNpc]` and `TargetPlayer` if attacker is a player character.
+	- Enforces 2-second anti-flicker tenure before Aggressor can change.
+	- Elects the most recent hitter; ties broken by Character.Name lexicographically.
+
+	@param groupName string -- Pack Tactics group id (as assigned by AssignGroup / newGroup)
+	@param hitNpc NPC -- The NPC that was hit
+	@param attackerChar Model? -- Attacker's character model, if known
+	@within NPC
+]=]
+function npc.NotifyHit(groupName: string, hitNpc: NPC, attackerChar: Model?)
+	local packGroupData = ActiveGroups[groupName]
+	if not packGroupData then return end
+	packGroupData.LastHitTimes[hitNpc] = os.clock()
+	if attackerChar and game.Players:GetPlayerFromCharacter(attackerChar) then
+		packGroupData.TargetPlayer = attackerChar
+	end
+	-- anti-flicker: min 2s tenure before Aggressor can change
+	local currentTimeForElect = os.clock()
+	if packGroupData.Aggressor and currentTimeForElect - (packGroupData.lastAggressorChange or 0) < 2 then return end
+	-- elect Aggressor: most recent hitter
+	local bestCandidate: NPC? = nil
+	local bestHitTime: number = -math.huge
+	local bestCandidateName: string = ""
+	for memberNpc in pairs(packGroupData.Members) do
+		local hitTimeForMember = packGroupData.LastHitTimes[memberNpc] or -math.huge
+		local memberCharacterName = memberNpc.Character and memberNpc.Character.Name or ""
+		if hitTimeForMember > bestHitTime or (hitTimeForMember == bestHitTime and memberCharacterName < bestCandidateName) then
+			bestCandidate, bestHitTime, bestCandidateName = memberNpc, hitTimeForMember, memberCharacterName
+		end
+	end
+	if bestCandidate and bestCandidate ~= packGroupData.Aggressor then
+		packGroupData.Aggressor = bestCandidate
+		packGroupData.lastAggressorChange = currentTimeForElect
+	end
+end
+
+--[=[
+	Adds this NPC to a Pack Tactics group, creating the group if needed.
+	Enforces max 5 members; first member becomes Leader and Aggressor automatically.
+	Stores the group id on the NPC as `_GroupName` for Brain consumption until Destroy.
+
+	@param groupName string -- Group instance id (e.g. from newGroup GUID)
+	@param _role string? -- Requested role ("Leader"/"Subordinate"); only affects initial Leader if group empty
+	@within NPC
+]=]
+function npc.AssignGroup(self: NPC, groupName: string, _role: string?)
+	if not groupName or groupName == "" then return end
+	local packGroupData = ActiveGroups[groupName]
+	if not packGroupData then
+		packGroupData = {
+			Leader = nil,
+			Aggressor = nil,
+			Members = {},
+			TargetPlayer = nil,
+			SharedWaypoints = nil,
+			LastHitTimes = {},
+			lastAggressorChange = 0,
+		}
+		ActiveGroups[groupName] = packGroupData
+	end
+	-- enforce max 5
+	local memberCount = 0
+	for _ in pairs(packGroupData.Members) do memberCount += 1 end
+	if memberCount >= 5 and not packGroupData.Members[self] then return end
+	packGroupData.Members[self] = true
+	packGroupData.LastHitTimes[self] = packGroupData.LastHitTimes[self] or 0
+	-- first member auto-Leader regardless of requested role
+	if not packGroupData.Leader then
+		packGroupData.Leader = self
+	end
+	if not packGroupData.Aggressor then
+		packGroupData.Aggressor = self
+	end
+	-- store on NPC for brain to read (no freeze issues until Destroy)
+	(self :: any)._GroupName = groupName
+end
+
+--[=[
+	Returns the Pack Tactics group name for this NPC, if assigned.
+
+	@return string? -- Group id or nil if not in a group
+	@within NPC
+]=]
+function npc.GetGroupName(self: NPC): string?
+	return (self :: any)._GroupName
+end
+
+--[=[
+	Spawns a full Pack Tactics group from an NPC_Dictionary group template.
+
+	Creates a unique instance id (`groupTemplateName_GUID`), spawns the Leader at
+	spawnCFrame (or SpawnLocation part if available, else 0,5,0), then places Goons
+	in a radial offset (4 + 1.5*index studs, 90° increments) via PivotTo.
+
+	@param groupTemplateName string -- Key for NPC_Dictionary.getGroup (must contain .Leader and .Goons)
+	@param spawnCFrame CFrame? -- Desired spawn cframe; falls back to workspace.NPC.SpawnLocation.CFrame
+	@return {NPC} -- Array of created members (Leader first)
+	@within NPC
+]=]
+function npc.newGroup(groupTemplateName: string, spawnCFrame: CFrame?): {NPC}
+	local groupTemplate = NPC_Dictionary.getGroup(groupTemplateName)
+	assert(groupTemplate, "[npc.newGroup] unknown group template '" .. tostring(groupTemplateName) .. "'")
+	local httpService = game:GetService("HttpService")
+	local groupInstanceName = groupTemplateName .. "_" .. httpService:GenerateGUID(false)
+	local createdGroupMembers: {NPC} = {}
+	local spawnPosition = spawnCFrame or CFrame.new(0, 5, 0)
+	if NPCFolder and NPCFolder:FindFirstChild("SpawnLocation") then
+		local spawnLocationPart = NPCFolder:FindFirstChild("SpawnLocation")
+		if spawnLocationPart:IsA("BasePart") then
+			spawnPosition = spawnLocationPart.CFrame
+		end
+	end
+	local function createAndPlaceMember(templateName: string, memberIndex: number): NPC
+		local createdMember = npc.new(templateName)
+		if createdMember and createdMember.Character and createdMember.Character.PrimaryPart then
+			local angleOffset = (memberIndex * 90) % 360
+			local distanceFromLeader = 4 + (memberIndex * 1.5)
+			local offsetVector = Vector3.new(math.cos(math.rad(angleOffset)) * distanceFromLeader, 0, math.sin(math.rad(angleOffset)) * distanceFromLeader)
+			local memberCFrame = spawnPosition + offsetVector
+			pcall(function()
+				createdMember.Character:PivotTo(CFrame.new(memberCFrame.Position))
+			end)
+		end
+		return createdMember
+	end
+	local leaderNpc = createAndPlaceMember(groupTemplate.Leader, 0)
+	leaderNpc:AssignGroup(groupInstanceName, "Leader")
+	table.insert(createdGroupMembers, leaderNpc)
+	for goonIndex = 1, groupTemplate.NumberOfGoons do
+		local goonNpc = createAndPlaceMember(groupTemplate.Goons, goonIndex)
+		goonNpc:AssignGroup(groupInstanceName, "Subordinate")
+		table.insert(createdGroupMembers, goonNpc)
+	end
+	return createdGroupMembers
+end
+
+--[=[
+	Destroys the NPC: removes it from Pack Tactics group (re-promoting Leader to most
+	recent hitter if needed, clearing Aggressor, deleting empty groups), removes it from
+	CharToNPC, destroys its Character model, then clears and freezes the NPC object itself
+	so it can no longer be mutated or reused. Also scrubs any remaining references to this
+	NPC out of every table in Combat_Data.
+
 	@within NPC
 ]=]
 
 function npc:Destroy()
+	-- remove from Pack Tactics group + re-promote
+	local myGroupName: string? = (self :: any)._GroupName
+	if myGroupName and ActiveGroups[myGroupName] then
+		local packGroupData = ActiveGroups[myGroupName]
+		packGroupData.Members[self] = nil
+		packGroupData.LastHitTimes[self] = nil
+		if packGroupData.Leader == self then
+			-- promote most recent hitter as new Leader
+			local bestLeaderCandidate: NPC? = nil
+			local bestLeaderHitTime: number = -math.huge
+			for memberNpc in pairs(packGroupData.Members) do
+				local hitTimeForMember = packGroupData.LastHitTimes[memberNpc] or 0
+				if hitTimeForMember > bestLeaderHitTime then bestLeaderCandidate, bestLeaderHitTime = memberNpc, hitTimeForMember end
+			end
+			packGroupData.Leader = bestLeaderCandidate
+		end
+		if packGroupData.Aggressor == self then
+			packGroupData.Aggressor = nil
+		end
+		local isGroupEmpty = true
+		for _ in pairs(packGroupData.Members) do isGroupEmpty = false break end
+		if isGroupEmpty then ActiveGroups[myGroupName] = nil end
+	end
 	CharToNPC[self.Character] = nil
 	self.Character:Destroy()
 	table.clear(self)
@@ -251,6 +500,21 @@ function npc:Destroy()
 		end
 	end
 end
+
+
+
+--[=[
+	Cancels the current attack if the NPC is swinging. No-ops if Swing attribute is false.
+
+	@within NPC
+]=]
+function npc:CancelAttack()
+	if self.Character:GetAttribute("Swing") == false then return end
+	CombatHelper.CancelAttack(self.Character, self)
+end
+
+
+
 
 --[=[
 	Equips the NPC's current weapon (per its CurrentWeapon attribute) via EquipModule.
@@ -335,7 +599,7 @@ function npc:Unblock()
 end
 
 --[=[
-	Performs a dodge via DodgeModule, using the NPC's MovementObj. No-ops if transforming.
+	Performs a dodge via DodgeModule using this NPC's MovementObj. No-ops if IsTransforming is set.
 
 	@within NPC
 ]=]
@@ -355,7 +619,7 @@ function npc:Parry()
 	if self.Character:GetAttribute("IsTransforming") then
 		return
 	end
-	if HelpfullModule.CheckForAttributes(self.Character, true, true, true, true, true, false, true, true) then
+	if HelpfullModule.CheckForAttributes(self.Character, true, true, true, true, true, true, true, true) then
 		return
 	end
 	ParryModule.ParryAttempt(self.Character, self)

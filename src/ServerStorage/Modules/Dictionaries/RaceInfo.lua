@@ -6,10 +6,9 @@ local info = {
         ["Celestial"] = {
             ["Seraphim"] = {
                 PhysicalTraits = {
-                    Top = {},
-                    Middle = {},
-                    Bottom = {},
-                    Extras = {},
+                    Head = {"Halo"},
+                    Torso = {"None"},
+                    Extras = {"None"},
                 },
                 StatBonuses = { WNP = 3, SPT = 3, DEX = 1, END = 2 },
                 Talents = {},
@@ -17,9 +16,8 @@ local info = {
 
             ["Arch-Draculain"] = {
                 PhysicalTraits = {
-                    Top = {},
-                    Middle = {},
-                    Bottom = {},
+                    Head = {"Horns", "Pointed_Ears"},
+                    Torso = {"Tail"},
                     Extras = {},
                 },
                 StatBonuses = { WNP = 3, SPT = 3, DEX = 1, END = 2 },
@@ -30,13 +28,21 @@ local info = {
 
         ["Mortal"] = {
             ["Human"] = {
-                PhysicalTraits = {},
+                 PhysicalTraits = {
+                    Head = {"None"},
+                    Torso = {"None"},
+                    Extras = {},
+                },
                 StatBonuses = { WNP = 1, DEX = 1 },
                 Talents = {},
             },
 
-            ["Elf"] = {
-                PhysicalTraits = { "Pointed ears" },
+            ["Elven"] = {
+                  PhysicalTraits = {
+                    Head = {"Pointed_Ears"},
+                    Torso = {"None"},
+                    Extras = {},
+                },
                 StatBonuses = { DEX = 2, SPT = 1 },
                 Talents = {},
             },

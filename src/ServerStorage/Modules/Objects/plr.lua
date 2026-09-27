@@ -34,7 +34,7 @@ end)
 PS:CollisionGroupSetCollidable(CHAR_GROUP, VFX_GROUP, false)
 
 local function GroupSeter(char: Model)
-	for i, child in ipairs(char:GetDescendants()) do
+	for _, child in ipairs(char:GetDescendants()) do
 		if child:IsA("BasePart") then
 			child.CollisionGroup = CHAR_GROUP
 		end
@@ -59,28 +59,24 @@ local function LoadCharacterAppearance(plr: PLR)
 	AccessoriesFolder.Name = "Accessories"
 	AccessoriesFolder.Parent = plr.Character
 
-	for accessoryType, accessoryName in pairs(plr.Data.Accessories) do
-		if accessoryName ~= "" then
-			AcessoryManager.EquipAccessory(plr.Character, accessoryType)
+	for accessoryType, accessoryItem in pairs(plr.Data.Accessories) do
+		if accessoryItem ~= nil then
+			AcessoryManager.EquipAccessory(plr.Character, accessoryItem.Name)
 		end
 	end
 
-	local bodyColors = plr.Character:FindFirstChildOfClass("BodyColors")
+	local bodyColors = plr.Character:FindFirstChildOfClass("BodyColors") or Instance.new("BodyColors",plr.Character)
 
-	if plr.Data.Appearance.Skin_Tone ~= "" then
-		for i, colour in pairs(bodyColors) do
-			if
-				i.Name == "HeadColor"
-				or i.Name == "LeftArmColor"
-				or i.Name == "RightArmColor"
-				or i.Name == "LeftLegColor"
-				or i.Name == "RightLegColor"
-				or i.Name == "TorsoColor"
-			then
-				i.Color = Color3.fromHex(plr.Data.Appearance.Skin_Tone)
-			end
-		end
+		if plr.Data.Appearance.Skin_Tone ~= "" then
+		local skinColor = BrickColor.new(Color3.fromHex(plr.Data.Appearance.Skin_Tone))
+		bodyColors.HeadColor = skinColor
+		bodyColors.LeftArmColor = skinColor
+		bodyColors.RightArmColor = skinColor
+		bodyColors.LeftLegColor = skinColor
+		bodyColors.RightLegColor = skinColor
+		bodyColors.TorsoColor = skinColor
 	end
+
 end
 
 local function SetupStats(plr: PLR)
@@ -118,13 +114,13 @@ local function SetupStats(plr: PLR)
 		end
 
 		local function onStatMultChanged()
-			local Orginal_Mana = char:GetAttribute("Mana")
-			local Orginal_MF = char:GetAttribute("MF")
+			local Orginal_Mana = char:GetAttribute("Mana") :: number
+			local Orginal_MF = char:GetAttribute("MF") :: number
 			sync()
 			if char:GetAttribute("InCombat") then
 				char:SetAttribute("Mana", Orginal_Mana)
 			end
-			char:SetAttribute("MF", math.min(Orginal_MF, char:GetAttribute("MaxMF")))
+			char:SetAttribute("MF", math.min(Orginal_MF, char:GetAttribute("MaxMF") ::number))
 		end
 
 		char:GetAttributeChangedSignal("SPT"):Connect(onStatChanged)
@@ -180,7 +176,6 @@ local function SetupStats(plr: PLR)
 				char:SetAttribute("Stamina", Orginal)
 			end
 
-			print("New Target for STM = {", MaxStamina, "}")
 		end
 
 		char:GetAttributeChangedSignal("END"):Connect(onChanged)
@@ -199,7 +194,7 @@ end
 
 local function SetupStates(plr: PLR)
 	local char = plr.Character
-	char:SetAttribute("CurrentWeapon", "Fists") -- I would replace this with the players's weapon in .Data when i add not movesert restricted weapons
+	char:SetAttribute("CurrentWeapon", "Fists") -- I would replace this with the players's weapon in .Data when i add non movesert restricted weapons
 	char:SetAttribute("Element", plr.Element.Name)
 	char:SetAttribute("InCombat", false)
 	char:SetAttribute("MF", 0)
@@ -239,7 +234,6 @@ function plr.new(Player: Player, Slot: string): PLR
 			},
 		}, plr) :: any
 	) :: PLR
-
 	local profile
 	while true do
 		print(DataManger.Profiles)
@@ -248,12 +242,14 @@ function plr.new(Player: Player, Slot: string): PLR
 		if profile then
 			break
 		end
-		task.wait(0.1)
+		task.wait()
 	end
 
 	self.MovementObj = Movement.new(Player)
 
-	self.Data = profile.Data[Slot]
+	self.Data = profile.Data[Slot] --- Current Slot Data
+	self.GlobalData = profile.Data.GENERAL -- Generla Data that is used to access info such the bank and Global Settings
+	self.Settings = self.Data.Settings -- Settings data used to load keybinds for when they are added 
 
 	if self.Character.Parent ~= Workspace.Characters then
 		self.Character.Parent = workspace.Characters
@@ -262,7 +258,7 @@ function plr.new(Player: Player, Slot: string): PLR
 	local HRP = self.Character:FindFirstChild("HumanoidRootPart") :: BasePart
 
 	while self.MovementObj.IsReady == false do
-		task.wait(0.1)
+		task.wait(0.01)
 	end
 
 	local Cframeparts = self.Data.LastLocation
@@ -275,9 +271,10 @@ function plr.new(Player: Player, Slot: string): PLR
 	local Highlight = Instance.new("Highlight")
 	Highlight.Parent = self.Character
 	Highlight.FillColor = Color3.new(0, 1, 0)
+	Highlight.FillTransparency = 0.5
+	Highlight.OutlineTransparency = 1
 	Highlight.Name = "InitializeHighlight"
 	self.Highlight = Highlight
-	self.Character:SetAttribute("Iframes", true)
 	self.Character:SetAttribute("CurrentSlot", Slot)
 
 	self.CurrentSlot = Slot
@@ -288,6 +285,7 @@ function plr.new(Player: Player, Slot: string): PLR
 	)
 
 	local target = self.Data.Element
+
 	if target and target ~= "..." then
 		local ElementModule = require(SSModules.Element[target])
 		self.Element = ElementModule.new()
@@ -297,18 +295,21 @@ function plr.new(Player: Player, Slot: string): PLR
 		self.Element = ElementModule.new()
 	end
 
+
+
 	LoadCharacterAppearance(self)
 	SetupStats(self)
 	SetupStates(self)
 
-	if self.Element.Innate then
+	if  self.Element and self.Element.Innate then
 		self.Element:Innate(self.Character)
 	end
 
 	helpfullModule.ResetMobility(self.Character)
 	GroupSeter(self.Character)
+	
 
-	for i, v in pairs(self.Character:GetDescendants()) do
+	for _, v in pairs(self.Character:GetDescendants()) do
 		if v.Parent and v.Parent:IsA("Accessory") and v:IsA("BasePart") then
 			v.CanTouch = false
 			v.CanQuery = false
@@ -344,11 +345,10 @@ function plr.Cleanup(self: PLR)
 	ModeModule.CleanupForPlayer(Identifier)
 	ParryModule.CleanupForPlayer(Identifier)
 	SkillMasterController.CleanupForPlayer(Identifier)
-
 	playertoPLR[self.Player] = nil
 end
 
-function plr.Destroy(self: PLR)
+function plr:Destroy()
 	local Character = self.Character
 	if Character then
 		local HRP = Character:FindFirstChild("HumanoidRootPart")
@@ -379,27 +379,28 @@ function plr.GetPLRFromPlayer(Player: Player): PLR?
 	end
 end
 
-function plr.IncreaseStat(self: PLR, statName: string, amount: number?)
+function plr:IncreaseStat(statName: string, amount: number?)
 	self.Data.STAT_POINTS[statName] = self.Data.STAT_POINTS[statName] + (amount or 1)
 end
 
-function plr.EquipAccessory(self: PLR, accessoryType: string, accessoryName: string)
+function plr:EquipAccessory(accessoryType: string, accessoryItem)
 	AcessoryManager.EquipAccessory(self.Character, accessoryType)
-	DataManger.UpdateAccessories(self.Player, accessoryType, accessoryName)
+---	DataManger.UpdateAccessories(self.Player, accessoryType, accessoryItem)
 end
 
-function plr.UnequipAccessory(self: PLR, accessoryType: string)
+function plr:UnequipAccessory(accessoryType: string)
 	AcessoryManager.UnequipAccessory(self.Character, accessoryType)
-	DataManger.UpdateAccessories(self.Player, accessoryType, "")
+	---DataManger.UpdateAccessories(self.Player, accessoryType, nil)
 end
 
 function plr.FirstMovement(self: PLR)
 	self.HasMoved = true
 	local char = self.Character
-	char:SetAttribute("Iframes", false)
+	char:SetAttribute("Iframes", false) -- The Iframes where given  @src/ServerScriptService/Pre-Loading/PlayerInit.server.lua 
 	local hl = self.Highlight
 	if hl and hl.Parent then
 		hl:Destroy()
+		self.Highlight = nil
 	end
 end
 

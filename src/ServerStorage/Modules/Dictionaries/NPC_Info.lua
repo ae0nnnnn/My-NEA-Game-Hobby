@@ -1,12 +1,14 @@
 local NPC_Info = {}
 
+---// END is misssing as npcs dont have to worry about stamina so its not needed adn for downtime they would always use the base time
+
 local info = {
 	["TestNPC"] = {
 		Difficulty = "SmallFry",
 		Race = "Anomaly",
 		MobType = "Humanoid",
 		Element = "Astral",
-		Health = 12,
+		Health = 100000,
 		Skills = {},
 		Talents = {},
 		Drops = {},
@@ -132,7 +134,7 @@ local info = {
 		Difficulty = "Boss",
 		Race = "Celestial",
 		MobType = "Humanoid",
-		Element = "Bone",
+		Element = "Time",
 		Chest = true,
 		ChestType = "...",
 		Health = 10000,
@@ -154,16 +156,15 @@ local info = {
 
 local AIParams = {
 	SmallFry = {
-		AggroRange = 30,
-		AttackRange = 8,
-		ReactionTime = 0.5,
-		LowHealthThreshold = 0.25,
-		RetreatDuration = 1.5,
-		BlockChance = 0.25,
-		ParryChance = 0.15,
+		AggroRange = 36,
+		AttackRange = 10,
+		ReactionTime = 0.2215,
+		LowHealthThreshold = 0.18,
+		RetreatDuration = 1.0,
+		BlockChance = 0.20,
+		ParryChance = 0.32,
 		HyprParryChance = 0.03,
-		DodgeChance = 0.15,
-		StaminaCost = 2,
+		DodgeChance = 0.18,
 	},
 	MiniBoss = {
 		AggroRange = 40,
@@ -171,11 +172,10 @@ local AIParams = {
 		ReactionTime = 0.35,
 		LowHealthThreshold = 0.3,
 		RetreatDuration = 1.2,
-		BlockChance = 0.4,
-		ParryChance = 0.25,
+		BlockChance = 0.25,
+		ParryChance = 0.4,
 		HyprParryChance = 0.05,
 		DodgeChance = 0.2,
-		StaminaCost = 2,
 	},
 	Elite = {
 		AggroRange = 50,
@@ -183,11 +183,10 @@ local AIParams = {
 		ReactionTime = 0.2,
 		LowHealthThreshold = 0.35,
 		RetreatDuration = 0.8,
-		BlockChance = 0.6,
-		ParryChance = 0.4,
+		BlockChance = 0.4,
+		ParryChance = 0.6,
 		HyprParryChance = 0.08,
 		DodgeChance = 0.3,
-		StaminaCost = 2,
 	},
 	SuperEnemy = {
 		AggroRange = 60,
@@ -195,11 +194,10 @@ local AIParams = {
 		ReactionTime = 0.15,
 		LowHealthThreshold = 0.4,
 		RetreatDuration = 0.4,
-		BlockChance = 0.7,
-		ParryChance = 0.5,
+		BlockChance = 0.5,
+		ParryChance = 0.7,
 		HyprParryChance = 0.12,
 		DodgeChance = 0.4,
-		StaminaCost = 2,
 	},
 
 	Boss = {
@@ -208,20 +206,40 @@ local AIParams = {
 		ReactionTime = 0.15,
 		LowHealthThreshold = 0.4,
 		RetreatDuration = 0, -- bosses likely never retreat
-		BlockChance = 0.6,
-		ParryChance = 0.4,
+		BlockChance = 0.4,
+		ParryChance = 0.6,
 		DodgeChance = 0.3,
-		StaminaCost = 2,
+		HyprParryChance = 0.08,
 	},
 }
 
-function NPC_Info.getStats(npc)
+local Groups = {
+	BanditGroup = {
+		Leader = "TestNPC",
+		Goons = "TestNPC",
+		NumberOfGoons = 2,
+	},
+}
+
+export type Npc_Info = typeof(info.TestNPC)
+export type AI_info = typeof(AIParams.Elite)
+export type GroupTemplate = typeof(Groups.BanditGroup)
+
+function NPC_Info.getStats(npc):Npc_Info
 	return info[npc]
 end
 
 -- NEW: lookup AI params by Difficulty tier
-function NPC_Info.getAIParams(difficulty)
+function NPC_Info.getAIParams(difficulty):AI_info
 	return AIParams[difficulty]
+end
+
+function NPC_Info.getGroup(groupName: string): GroupTemplate?
+	return Groups[groupName]
+end
+
+function NPC_Info.getAllGroups(): {[string]: GroupTemplate}
+	return Groups
 end
 
 return NPC_Info
